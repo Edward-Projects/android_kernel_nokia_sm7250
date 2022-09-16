@@ -136,13 +136,19 @@ static enum blk_eh_timer_return mmc_mq_timed_out(struct request *req,
 	struct request_queue *q = req->q;
 	struct mmc_queue *mq = q->queuedata;
 	unsigned long flags;
-	bool ignore_tout;
+	int ret;
 
 	spin_lock_irqsave(q->queue_lock, flags);
-	ignore_tout = mq->recovery_needed || !mq->use_cqe;
-	spin_unlock_irqrestore(q->queue_lock, flags);
 
-	return ignore_tout ? BLK_EH_RESET_TIMER : mmc_cqe_timed_out(req);
+	if (mq->recovery_needed || !mq->use_cqe) {
+		ret = BLK_EH_RESET_TIMER;
+		spin_unlock_irqrestore(q->queue_lock, flags);
+	} else {
+		spin_unlock_irqrestore(q->queue_lock, flags);
+		ret = mmc_cqe_timed_out(req);
+	}
+
+	return ret;
 }
 
 static void mmc_mq_recovery_handler(struct work_struct *work)
@@ -196,7 +202,7 @@ static void mmc_queue_setup_discard(struct request_queue *q,
 	q->limits.discard_granularity = card->pref_erase << 9;
 	/* granularity must not be greater than max. discard */
 	if (card->pref_erase > max_discard)
-		q->limits.discard_granularity = SECTOR_SIZE;
+		q->limits.discard_granularity = 0;
 	if (mmc_can_secure_erase_trim(card))
 		blk_queue_flag_set(QUEUE_FLAG_SECERASE, q);
 }
