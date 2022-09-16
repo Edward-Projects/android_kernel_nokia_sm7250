@@ -26,7 +26,9 @@
 #include <soc/qcom/restart.h>
 #include <soc/qcom/watchdog.h>
 #include <soc/qcom/minidump.h>
-
+#ifdef CONFIG_DLOAD_DEBUG
+#include <soc/qcom/subsystem_restart.h>
+#endif /*CONFIG_DLOAD_DEBUG*/
 #define EMERGENCY_DLOAD_MAGIC1    0x322A4F99
 #define EMERGENCY_DLOAD_MAGIC2    0xC67E4350
 #define EMERGENCY_DLOAD_MAGIC3    0x77777777
@@ -62,7 +64,11 @@ static void scm_disable_sdi(void);
  * There is no API from TZ to re-enable the registers.
  * So the SDI cannot be re-enabled when it already by-passed.
  */
+#ifdef CONFIG_RELEASE_VERSION
+static int download_mode = 0;
+#else /*CONFIG_RELEASE_VERSION*/
 static int download_mode = 1;
+#endif /*CONFIG_RELEASE_VERSION*/
 static struct kobject dload_kobj;
 
 static int in_panic;
@@ -103,11 +109,30 @@ static size_t store_dload_mode(struct kobject *kobj, struct attribute *attr,
 RESET_ATTR(dload_mode, 0644, show_dload_mode, store_dload_mode);
 #endif /* CONFIG_QCOM_MINIDUMP */
 
+/* add sysfs node to support diag to edl start */
+static size_t store_hq_edl_ctrl(struct kobject *kobj, struct attribute *attr,
+			       const char *buf, size_t count);
+RESET_ATTR(hq_edl, 0644, NULL, store_hq_edl_ctrl);
+/* add sysfs node to support diag to edl end */
+#ifdef CONFIG_DLOAD_DEBUG
+static ssize_t show_dload_enable(struct kobject *kobj, struct attribute *attr,
+                              char *buf);
+static size_t store_dload_enable(struct kobject *kobj, struct attribute *attr,
+                              const char *buf, size_t count);
+RESET_ATTR(dload_enable, 0644, show_dload_enable, store_dload_enable);
+#endif /* CONFIG_DLOAD_DEBUG */
+
 static struct attribute *reset_attrs[] = {
+/* add sysfs node to support diag to edl start */
+	&reset_attr_hq_edl.attr,
+/* add sysfs node to support diag to edl end */
 	&reset_attr_emmc_dload.attr,
 #ifdef CONFIG_QCOM_MINIDUMP
 	&reset_attr_dload_mode.attr,
 #endif
+#ifdef CONFIG_DLOAD_DEBUG
+	&reset_attr_dload_enable.attr,
+#endif /*CONFIG_DLOAD_DEBUG*/
 	NULL
 };
 
@@ -422,6 +447,43 @@ static size_t store_dload_mode(struct kobject *kobj, struct attribute *attr,
 }
 #endif /* CONFIG_QCOM_MINIDUMP */
 
+#ifdef CONFIG_DLOAD_DEBUG
+static ssize_t show_dload_enable(struct kobject *kobj, struct attribute *attr,
+				char *buf)
+{
+	return snprintf(buf, sizeof(download_mode), "%u\n", download_mode);
+}
+
+static size_t store_dload_enable(struct kobject *kobj, struct attribute *attr,
+				const char *buf, size_t count)
+{
+	uint32_t enabled;
+	int ret;
+
+	ret = kstrtouint(buf, 0, &enabled);
+	if (ret < 0)
+		return ret;
+
+	if (!((enabled == 0) || (enabled == 1)))
+		return -EINVAL;
+	pr_info("%s enabled=%d\n", __func__, enabled);
+	download_mode = enabled;
+
+	if (enabled) {
+		qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET);
+		set_subsys_restart_level(RESET_SOC);
+	}
+	else {
+		qpnp_pon_system_pwr_off(PON_POWER_OFF_HARD_RESET);
+		set_subsys_restart_level(RESET_SUBSYS_COUPLED);
+	}
+
+	set_dload_mode(enabled);
+	
+
+	return count;
+}
+#endif /* CONFIG_DLOAD_DEBUG */
 static void scm_disable_sdi(void)
 {
 	int ret;
@@ -464,6 +526,26 @@ static void halt_spmi_pmic_arbiter(void)
 	}
 }
 
+/* add sysfs node to support diag to edl start */
+static bool diag_reboot_edl = false;
+static void msm_reboot_to_edl(void)
+{
+	diag_reboot_edl = true;
+	orderly_reboot();
+}
+
+static size_t store_hq_edl_ctrl(struct kobject *kobj, struct attribute *attr,
+				const char *buf, size_t count)
+{
+	if (sysfs_streq(buf, "enable")) {
+		msm_reboot_to_edl();
+	}
+
+	return count;
+}
+/* add sysfs node to support diag to edl end */
+
+extern void smb5_configure_afp_enable(int enable);
 static void msm_restart_prepare(const char *cmd)
 {
 	bool need_warm_reset = false;
@@ -477,9 +559,7 @@ static void msm_restart_prepare(const char *cmd)
 
 	if (qpnp_pon_check_hard_reset_stored()) {
 		/* Set warm reset as true when device is in dload mode */
-		if (get_dload_mode() ||
-			((cmd != NULL && cmd[0] != '\0') &&
-			!strcmp(cmd, "edl")))
+		if (get_dload_mode() || diag_reboot_edl)
 			need_warm_reset = true;
 	} else {
 		need_warm_reset = (get_dload_mode() ||
@@ -489,11 +569,23 @@ static void msm_restart_prepare(const char *cmd)
 	if (force_warm_reboot)
 		pr_info("Forcing a warm reset of the system\n");
 
+	pr_err("wxf: force %d, need: %d\n", force_warm_reboot, need_warm_reset);
 	/* Hard reset the PMIC unless memory contents must be maintained. */
-	if (force_warm_reboot || need_warm_reset)
+	if (force_warm_reboot || need_warm_reset || in_panic) {
+		if (!download_mode)
+			scm_disable_sdi();
+
+		// disable AFP function
+		smb5_configure_afp_enable(0);
 		qpnp_pon_system_pwr_off(PON_POWER_OFF_WARM_RESET);
-	else
+	} else {
 		qpnp_pon_system_pwr_off(PON_POWER_OFF_HARD_RESET);
+	}
+
+	if (diag_reboot_edl) {
+		enable_emergency_dload_mode();
+		goto edl_out;
+	}
 
 	if (cmd != NULL) {
 		if (!strncmp(cmd, "bootloader", 10)) {
@@ -520,6 +612,14 @@ static void msm_restart_prepare(const char *cmd)
 			qpnp_pon_set_restart_reason(
 				PON_RESTART_REASON_KEYS_CLEAR);
 			__raw_writel(0x7766550a, restart_reason);
+		} else if (!strcmp(cmd, "power-off-chg")) {
+			qpnp_pon_set_restart_reason(
+				PON_RESTART_REASON_CHARGER_MODE);
+			__raw_writel(0x7766550b, restart_reason);
+		} else if (!strcmp(cmd, "enable-serial-log")) {
+			qpnp_pon_set_restart_reason(
+				PON_RESTART_REASON_SERIALLOG_MODE);
+			__raw_writel(0x7766550c, restart_reason);
 		} else if (!strncmp(cmd, "oem-", 4)) {
 			unsigned long code;
 			int ret;
@@ -528,13 +628,12 @@ static void msm_restart_prepare(const char *cmd)
 			if (!ret)
 				__raw_writel(0x6f656d00 | (code & 0xff),
 					     restart_reason);
-		} else if (!strncmp(cmd, "edl", 3)) {
-			enable_emergency_dload_mode();
 		} else {
 			__raw_writel(0x77665501, restart_reason);
 		}
 	}
 
+edl_out:
 	flush_cache_all();
 
 	/*outer_flush_all is not supported by 64bit kernel*/
