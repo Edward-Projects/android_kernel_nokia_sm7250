@@ -94,11 +94,11 @@ static void remote_function(void *data)
  * @info:	the function call argument
  *
  * Calls the function @func when the task is currently running. This might
- * be on the current CPU, which just calls the function directly.  This will
- * retry due to any failures in smp_call_function_single(), such as if the
- * task_cpu() goes offline concurrently.
+ * be on the current CPU, which just calls the function directly
  *
- * returns @func return value or -ESRCH or -ENXIO when the process isn't running
+ * returns: @func return value, or
+ *	    -ESRCH  - when the process isn't running
+ *	    -EAGAIN - when the process moved away
  */
 static int
 task_function_call(struct task_struct *p, remote_function_f func, void *info)
@@ -111,17 +111,11 @@ task_function_call(struct task_struct *p, remote_function_f func, void *info)
 	};
 	int ret;
 
-	for (;;) {
-		ret = smp_call_function_single(task_cpu(p), remote_function,
-					       &data, 1);
+	do {
+		ret = smp_call_function_single(task_cpu(p), remote_function, &data, 1);
 		if (!ret)
 			ret = data.ret;
-
-		if (ret != -EAGAIN)
-			break;
-
-		cond_resched();
-	}
+	} while (ret == -EAGAIN);
 
 	return ret;
 }
@@ -431,8 +425,13 @@ static cpumask_var_t perf_online_mask;
  *   0 - disallow raw tracepoint access for unpriv
  *   1 - disallow cpu events for unpriv
  *   2 - disallow kernel profiling for unpriv
+ *   3 - disallow all unpriv perf event use
  */
+#ifdef CONFIG_SECURITY_PERF_EVENTS_RESTRICT
+int sysctl_perf_event_paranoid __read_mostly = 3;
+#else
 int sysctl_perf_event_paranoid __read_mostly = 2;
+#endif
 
 /* Minimum for 512 kiB + 1 user control page */
 int sysctl_perf_event_mlock __read_mostly = 512 + (PAGE_SIZE / 1024); /* 'free' kiB per user */
@@ -9232,7 +9231,6 @@ perf_event_parse_addr_filter(struct perf_event *event, char *fstr,
 			if (token == IF_SRC_FILE || token == IF_SRC_FILEADDR) {
 				int fpos = token == IF_SRC_FILE ? 2 : 1;
 
-				kfree(filename);
 				filename = match_strdup(&args[fpos]);
 				if (!filename) {
 					ret = -ENOMEM;
@@ -9279,13 +9277,16 @@ perf_event_parse_addr_filter(struct perf_event *event, char *fstr,
 				 */
 				ret = -EOPNOTSUPP;
 				if (!event->ctx->task)
-					goto fail;
+					goto fail_free_name;
 
 				/* look up the path and grab its inode */
 				ret = kern_path(filename, LOOKUP_FOLLOW,
 						&filter->path);
 				if (ret)
-					goto fail;
+					goto fail_free_name;
+
+				kfree(filename);
+				filename = NULL;
 
 				ret = -EINVAL;
 				if (!filter->path.dentry ||
@@ -9305,13 +9306,13 @@ perf_event_parse_addr_filter(struct perf_event *event, char *fstr,
 	if (state != IF_STATE_ACTION)
 		goto fail;
 
-	kfree(filename);
 	kfree(orig);
 
 	return 0;
 
-fail:
+fail_free_name:
 	kfree(filename);
+fail:
 	free_filters_list(filters);
 	kfree(orig);
 
@@ -10883,6 +10884,9 @@ SYSCALL_DEFINE5(perf_event_open,
 	/* for future expandability... */
 	if (flags & ~PERF_FLAG_ALL)
 		return -EINVAL;
+
+	if (perf_paranoid_any() && !capable(CAP_SYS_ADMIN))
+		return -EACCES;
 
 	/* Do we allow access to perf_event_open(2) ? */
 	err = security_perf_event_open(&attr, PERF_SECURITY_OPEN);
