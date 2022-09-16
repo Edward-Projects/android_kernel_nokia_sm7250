@@ -366,13 +366,6 @@ config HAVE_RCU_TABLE_FREE
 config HAVE_RCU_TABLE_INVALIDATE
 	bool
 
-config ARCH_WANT_IRQS_OFF_ACTIVATE_MM
-	bool
-	help
-	  Temporary select until all architectures can be converted to have
-	  irqs disabled over activate_mm. Architectures that do IPI based TLB
-	  shootdowns should enable this.
-
 config ARCH_HAVE_NMI_SAFE_CMPXCHG
 	bool
 
@@ -872,7 +865,7 @@ config CPU_NO_EFFICIENT_FFS
 	def_bool n
 
 config HAVE_ARCH_VMAP_STACK
-	def_bool n
+	def_bool y
 	help
 	  An arch should select this symbol if it can support kernel stacks
 	  in vmalloc space.  This means:
