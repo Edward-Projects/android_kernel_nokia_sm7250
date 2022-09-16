@@ -480,7 +480,6 @@ struct ufs_clk_gating {
 	struct device_attribute delay_perf_attr;
 	struct device_attribute enable_attr;
 	bool is_enabled;
-	bool gate_wk_in_process;
 	int active_reqs;
 	struct workqueue_struct *clk_gating_workq;
 };
@@ -1024,6 +1023,9 @@ struct ufs_hba {
 
 	struct ufs_vreg_info vreg_info;
 	struct list_head clk_list_head;
+
+	struct ufs_health_info health_info;
+	u16 manufacture_date;
 
 	bool wlun_dev_clr_ua;
 
