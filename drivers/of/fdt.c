@@ -32,6 +32,8 @@
 
 #include "of_private.h"
 
+#include <linux/hqsysfs.h>
+
 /*
  * of_fdt_limit_memory - limit the number of regions in the /memory node
  * @limit: maximum entries
@@ -1115,6 +1117,24 @@ u64 __init dt_mem_next_cell(int s, const __be32 **cellp)
 	return of_read_number(p, s);
 }
 
+/*get ddr infomations----start*/
+static unsigned long total_ram_size = 0;
+#define HQ_SZ_1G (1*1024*1024*1024)
+char hq_ddr_size[90];
+int get_hq_total_ram(void)
+{
+	int ram_size;
+
+	if ((total_ram_size > HQ_SZ_1G) && ((total_ram_size % HQ_SZ_1G) > 0))
+		ram_size = ((total_ram_size / HQ_SZ_1G) + 1);
+	else
+		ram_size = total_ram_size / HQ_SZ_1G;
+
+	pr_debug("Device ddr size is %dGB\n", ram_size);
+	return ram_size;
+}
+/*get ddr infomations----end*/
+
 /**
  * early_init_dt_scan_memory - Look for and parse memory nodes
  */
@@ -1151,7 +1171,9 @@ int __init early_init_dt_scan_memory(unsigned long node, const char *uname,
 			continue;
 		pr_debug(" - %llx ,  %llx\n", (unsigned long long)base,
 		    (unsigned long long)size);
-
+		/*get ddr infomations----start*/
+		total_ram_size += size;
+		/*get ddr infomations----end*/
 		early_init_dt_add_memory_arch(base, size);
 
 		if (!hotpluggable)
@@ -1162,6 +1184,10 @@ int __init early_init_dt_scan_memory(unsigned long node, const char *uname,
 				base, base + size);
 	}
 
+	/*get ddr infomations----start*/
+	snprintf(hq_ddr_size, sizeof(hq_ddr_size), "DDR_SIZE:%dG", get_hq_total_ram());
+	hq_register_hw_info(HWID_DDR, hq_ddr_size);
+	/*get ddr infomations----end*/
 	return 0;
 }
 
@@ -1235,10 +1261,6 @@ int __init early_init_dt_scan_chosen(unsigned long node, const char *uname,
 
 		/* try to clear seed so it won't be found. */
 		fdt_nop_property(initial_boot_params, node, "rng-seed");
-
-		/* update CRC check value */
-		of_fdt_crc32 = crc32_be(~0, initial_boot_params,
-				fdt_totalsize(initial_boot_params));
 	}
 
 	/* break now */
@@ -1343,8 +1365,6 @@ bool __init early_init_dt_verify(void *params)
 
 	/* Setup flat device-tree pointer */
 	initial_boot_params = params;
-	of_fdt_crc32 = crc32_be(~0, initial_boot_params,
-				fdt_totalsize(initial_boot_params));
 	return true;
 }
 
@@ -1370,6 +1390,8 @@ bool __init early_init_dt_scan(void *params)
 		return false;
 
 	early_init_dt_scan_nodes();
+	of_fdt_crc32 = crc32_be(~0, initial_boot_params,
+				fdt_totalsize(initial_boot_params));
 	return true;
 }
 

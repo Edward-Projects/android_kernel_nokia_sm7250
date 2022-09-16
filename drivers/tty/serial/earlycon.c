@@ -124,11 +124,30 @@ static int __init parse_options(struct earlycon_device *device, char *options)
 	return 0;
 }
 
+#ifdef CONFIG_DEBUG_SERIAL_CTRL
+int debug_serial_ctrl = 0;
+
+static int __init set_serial_log_enable(char *str)
+{
+	debug_serial_ctrl = 1;
+
+	return 0;
+}
+
+early_param("enable_serial_log", set_serial_log_enable);
+#endif
+
 static int __init register_earlycon(char *buf, const struct earlycon_id *match)
 {
 	int err;
 	struct uart_port *port = &early_console_dev.port;
 
+#ifdef CONFIG_DEBUG_SERIAL_CTRL
+	if (debug_serial_ctrl == 0) {
+		pr_err("Disable early serial log print\n");
+		return 0;
+	}
+#endif
 	/* On parsing error, pass the options buf to the setup function */
 	if (buf && !parse_options(&early_console_dev, buf))
 		buf = NULL;

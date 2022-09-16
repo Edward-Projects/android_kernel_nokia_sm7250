@@ -555,15 +555,39 @@ static void msm_gpio_dbg_show_one(struct seq_file *s,
 		val = !!(io_reg & BIT(g->out_bit));
 	else
 		val = !!(io_reg & BIT(g->in_bit));
+	if (s!=NULL) {
+		seq_printf(s, " %-8s: %-3s", g->name, is_out ? "out" : "in");
+		seq_printf(s, " %-4s func%d", val ? "high" : "low", func);
+		seq_printf(s, " %dmA", msm_regval_to_drive(drive));
+		if (pctrl->soc->pull_no_keeper)
+			seq_printf(s, " %s", pulls_no_keeper[pull]);
+		else
+			seq_printf(s, " %s", pulls_keeper[pull]);
 
-	seq_printf(s, " %-8s: %-3s", g->name, is_out ? "out" : "in");
-	seq_printf(s, " %-4s func%d", val ? "high" : "low", func);
-	seq_printf(s, " %dmA", msm_regval_to_drive(drive));
-	if (pctrl->soc->pull_no_keeper)
-		seq_printf(s, " %s", pulls_no_keeper[pull]);
-	else
-		seq_printf(s, " %s", pulls_keeper[pull]);
-	seq_puts(s, "\n");
+		seq_puts(s, "\n");
+	} else {
+		pr_err(" %-8s: %-3s", g->name, is_out ? "out" : "in");
+		pr_err(" %-4s func%d", val ? "high" : "low", func);
+		pr_err(" %dmA", msm_regval_to_drive(drive));
+		if (pctrl->soc->pull_no_keeper)
+			pr_err(" %s", pulls_no_keeper[pull]);
+		else
+			pr_err(" %s", pulls_keeper[pull]);
+
+		pr_err("\n");
+	}
+}
+#define GPIO_NUM 8
+static unsigned int protect_gpio_array[GPIO_NUM] = {0, 1, 2, 3, 59, 60, 61, 62};
+static inline bool check_gpio_is_protected(unsigned int gpio)
+{
+	int i = 0;
+	for(i = 0; i < GPIO_NUM; i++) {
+		if (gpio == protect_gpio_array[i])
+			return true;
+	}
+
+	return false;
 }
 
 static void msm_gpio_dbg_show(struct seq_file *s, struct gpio_chip *chip)
@@ -571,10 +595,22 @@ static void msm_gpio_dbg_show(struct seq_file *s, struct gpio_chip *chip)
 	unsigned gpio = chip->base;
 	unsigned i;
 
-	for (i = 0; i < chip->ngpio; i++, gpio++)
+	for (i = 0; i < chip->ngpio; i++, gpio++) {
+		pr_err("%s i=%d gpio=%d\n", __func__, i, gpio);
+		if (check_gpio_is_protected(i))
+			continue;
 		msm_gpio_dbg_show_one(s, NULL, chip, i, gpio);
+	}
 }
 
+void print_sleep_all_gpio_status(void)
+{
+	struct msm_pinctrl *pctrl = msm_pinctrl_data;
+	struct gpio_chip *chip = &pctrl->chip;
+	msm_gpio_dbg_show(NULL, chip);
+
+}
+EXPORT_SYMBOL(print_sleep_all_gpio_status);
 #else
 #define msm_gpio_dbg_show NULL
 #endif
