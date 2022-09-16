@@ -50,7 +50,6 @@ TRACE_DEFINE_ENUM(CP_RECOVERY);
 TRACE_DEFINE_ENUM(CP_DISCARD);
 TRACE_DEFINE_ENUM(CP_TRIMMED);
 TRACE_DEFINE_ENUM(CP_PAUSE);
-TRACE_DEFINE_ENUM(CP_RESIZE);
 
 #define show_block_type(type)						\
 	__print_symbolic(type,						\
@@ -137,8 +136,7 @@ TRACE_DEFINE_ENUM(CP_RESIZE);
 		{ CP_RECOVERY,	"Recovery" },				\
 		{ CP_DISCARD,	"Discard" },				\
 		{ CP_PAUSE,	"Pause" },				\
-		{ CP_TRIMMED,	"Trimmed" },				\
-		{ CP_RESIZE,	"Resize" })
+		{ CP_TRIMMED,	"Trimmed" })
 
 #define show_fsync_cpreason(type)					\
 	__print_symbolic(type,						\
@@ -336,7 +334,7 @@ TRACE_EVENT(f2fs_unlink_enter,
 		__field(ino_t,	ino)
 		__field(loff_t,	size)
 		__field(blkcnt_t, blocks)
-		__string(name, dentry->d_name.name)
+		__field(const char *,	name)
 	),
 
 	TP_fast_assign(
@@ -344,7 +342,7 @@ TRACE_EVENT(f2fs_unlink_enter,
 		__entry->ino	= dir->i_ino;
 		__entry->size	= dir->i_size;
 		__entry->blocks	= dir->i_blocks;
-		__assign_str(name, dentry->d_name.name);
+		__entry->name	= dentry->d_name.name;
 	),
 
 	TP_printk("dev = (%d,%d), dir ino = %lu, i_size = %lld, "
@@ -352,7 +350,7 @@ TRACE_EVENT(f2fs_unlink_enter,
 		show_dev_ino(__entry),
 		__entry->size,
 		(unsigned long long)__entry->blocks,
-		__get_str(name))
+		__entry->name)
 );
 
 DEFINE_EVENT(f2fs__inode_exit, f2fs_unlink_exit,
@@ -813,20 +811,20 @@ TRACE_EVENT(f2fs_lookup_start,
 	TP_STRUCT__entry(
 		__field(dev_t,	dev)
 		__field(ino_t,	ino)
-		__string(name, dentry->d_name.name)
+		__field(const char *,	name)
 		__field(unsigned int, flags)
 	),
 
 	TP_fast_assign(
 		__entry->dev	= dir->i_sb->s_dev;
 		__entry->ino	= dir->i_ino;
-		__assign_str(name, dentry->d_name.name);
+		__entry->name	= dentry->d_name.name;
 		__entry->flags	= flags;
 	),
 
 	TP_printk("dev = (%d,%d), pino = %lu, name:%s, flags:%u",
 		show_dev_ino(__entry),
-		__get_str(name),
+		__entry->name,
 		__entry->flags)
 );
 
@@ -840,7 +838,7 @@ TRACE_EVENT(f2fs_lookup_end,
 	TP_STRUCT__entry(
 		__field(dev_t,	dev)
 		__field(ino_t,	ino)
-		__string(name, dentry->d_name.name)
+		__field(const char *,	name)
 		__field(nid_t,	cino)
 		__field(int,	err)
 	),
@@ -848,14 +846,14 @@ TRACE_EVENT(f2fs_lookup_end,
 	TP_fast_assign(
 		__entry->dev	= dir->i_sb->s_dev;
 		__entry->ino	= dir->i_ino;
-		__assign_str(name, dentry->d_name.name);
+		__entry->name	= dentry->d_name.name;
 		__entry->cino	= ino;
 		__entry->err	= err;
 	),
 
 	TP_printk("dev = (%d,%d), pino = %lu, name:%s, ino:%u, err:%d",
 		show_dev_ino(__entry),
-		__get_str(name),
+		__entry->name,
 		__entry->cino,
 		__entry->err)
 );
@@ -1849,8 +1847,6 @@ TRACE_EVENT(f2fs_iostat,
 		__field(unsigned long long,	app_rio)
 		__field(unsigned long long,	app_mrio)
 		__field(unsigned long long,	fs_drio)
-		__field(unsigned long long,	fs_gdrio)
-		__field(unsigned long long,	fs_cdrio)
 		__field(unsigned long long,	fs_nrio)
 		__field(unsigned long long,	fs_mrio)
 		__field(unsigned long long,	fs_discard)
@@ -1875,8 +1871,6 @@ TRACE_EVENT(f2fs_iostat,
 		__entry->app_rio	= iostat[APP_READ_IO];
 		__entry->app_mrio	= iostat[APP_MAPPED_READ_IO];
 		__entry->fs_drio	= iostat[FS_DATA_READ_IO];
-		__entry->fs_gdrio	= iostat[FS_GDATA_READ_IO];
-		__entry->fs_cdrio	= iostat[FS_CDATA_READ_IO];
 		__entry->fs_nrio	= iostat[FS_NODE_READ_IO];
 		__entry->fs_mrio	= iostat[FS_META_READ_IO];
 		__entry->fs_discard	= iostat[FS_DISCARD];
@@ -1888,16 +1882,15 @@ TRACE_EVENT(f2fs_iostat,
 		"gc [data=%llu, node=%llu], "
 		"cp [data=%llu, node=%llu, meta=%llu], "
 		"app [read=%llu (direct=%llu, buffered=%llu), mapped=%llu], "
-		"fs [data=%llu, (gc_data=%llu, compr_data=%llu), "
-		"node=%llu, meta=%llu]",
+		"fs [data=%llu, node=%llu, meta=%llu]",
 		show_dev(__entry->dev), __entry->app_wio, __entry->app_dio,
 		__entry->app_bio, __entry->app_mio, __entry->fs_dio,
 		__entry->fs_nio, __entry->fs_mio, __entry->fs_discard,
 		__entry->fs_gc_dio, __entry->fs_gc_nio, __entry->fs_cp_dio,
 		__entry->fs_cp_nio, __entry->fs_cp_mio,
 		__entry->app_rio, __entry->app_drio, __entry->app_brio,
-		__entry->app_mrio, __entry->fs_drio, __entry->fs_gdrio,
-		__entry->fs_cdrio, __entry->fs_nrio, __entry->fs_mrio)
+		__entry->app_mrio, __entry->fs_drio, __entry->fs_nrio,
+		__entry->fs_mrio)
 );
 
 #endif /* _TRACE_F2FS_H */
