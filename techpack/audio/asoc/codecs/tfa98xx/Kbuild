@@ -7,6 +7,7 @@ else
 endif
 
 
+
 ifeq ($(KERNEL_BUILD), 1)
 	# These are configurable via Kconfig for kernel-based builds
 	# Need to explicitly configure for Android-based builds
@@ -15,10 +16,32 @@ ifeq ($(KERNEL_BUILD), 1)
 endif
 
 ifeq ($(KERNEL_BUILD), 0)
-	ifeq ($(CONFIG_ARCH_SDM660), y)
-		include $(AUDIO_ROOT)/config/sdm660auto.conf
+	ifeq ($(CONFIG_ARCH_SM8150), y)
+		include $(AUDIO_ROOT)/config/sm8150auto.conf
 		export
-		INCS    +=  -include $(AUDIO_ROOT)/config/sdm660autoconf.h
+		INCS    +=  -include $(AUDIO_ROOT)/config/sm8150autoconf.h
+	endif
+	ifeq ($(CONFIG_ARCH_SM6150), y)
+		include $(AUDIO_ROOT)/config/sm8150auto.conf
+		export
+		INCS    +=  -include $(AUDIO_ROOT)/config/sm8150autoconf.h
+	endif
+
+	ifeq ($(CONFIG_ARCH_KONA), y)
+		include $(AUDIO_ROOT)/config/konaauto.conf
+		INCS    +=  -include $(AUDIO_ROOT)/config/konaautoconf.h
+	endif
+
+	ifeq ($(CONFIG_ARCH_LITO), y)
+		include $(AUDIO_ROOT)/config/litoauto.conf
+		export
+		INCS    +=  -include $(AUDIO_ROOT)/config/litoautoconf.h
+	endif
+
+	ifeq ($(CONFIG_ARCH_SDMSHRIKE), y)
+		include $(AUDIO_ROOT)/config/sm8150auto.conf
+		export
+		INCS    +=  -include $(AUDIO_ROOT)/config/sm8150autoconf.h
 	endif
 endif
 
@@ -45,24 +68,24 @@ UAPI_INC :=	-I$(AUDIO_ROOT)/include/$(UAPI_DIR)
 ############ COMMON ############
 COMMON_DIR :=	include
 COMMON_INC :=	-I$(AUDIO_ROOT)/$(COMMON_DIR)
+TFA_INC    :=   -I$(AUDIO_ROOT)/asoc/codecs/tfa98xx/inc
 
-############ MSM Soundwire ############
-
-# for MSM Soundwire Codec
-ifdef CONFIG_SND_SOC_MSM_SDW
-	MSM_SDW_OBJS += msm_sdw_cdc.o
-	MSM_SDW_OBJS += msm_sdw_regmap.o
-	MSM_SDW_OBJS += msm-sdw-tables.o
-	MSM_SDW_OBJS += msm_sdw_cdc_utils.o
+# for TFA9874 Amplifer
+ifdef CONFIG_SND_SOC_TFA9874
+	TFA98XX_OBJS += src/tfa98xx.o
+	TFA98XX_OBJS += src/tfa_container.o
+	TFA98XX_OBJS += src/tfa_dsp.o
+	TFA98XX_OBJS += src/tfa_init.o
+	#TFA98XX_OBJS += src/tfa_debug.o
 endif
 
-LINUX_INC +=	-Iinclude/linux
+LINUX_INC += -Iinclude/linux
 
-INCS +=		$(COMMON_INC) \
-		$(UAPI_INC)
+INCS +=	$(COMMON_INC) \
+	$(UAPI_INC) \
+	$(TFA_INC)
 
 EXTRA_CFLAGS += $(INCS)
-
 
 CDEFINES +=	-DANI_LITTLE_BYTE_ENDIAN \
 		-DANI_LITTLE_BIT_ENDIAN \
@@ -72,7 +95,22 @@ CDEFINES +=	-DANI_LITTLE_BYTE_ENDIAN \
 		-DPTT_SOCK_SVC_ENABLE \
 		-Wall\
 		-Werror\
-		-D__linux__
+		-D__linux__\
+		-DDEBUG
+
+
+ifeq ($(TARGET_PRODUCT), $(filter $(TARGET_PRODUCT),lmi lmiin lmiinpro))
+	CDEFINES += -DTFA_NON_DSP_SOLUTION
+	CDEFINES += -DNXP_SPEAKERBOOST_V3
+endif
+
+ifeq ($(TARGET_PRODUCT), $(filter $(TARGET_PRODUCT),lmi lmiin lmiinpro cas umi cmi apollo alioth thyme enuma elish))
+	CDEFINES += -DAUDIO_SM8250_FLAG
+endif
+
+ifneq (,$(filter $(TARGET_PRODUCT), picasso picassoin))
+CDEFINES += -DTFA_NON_DSP_SOLUTION
+endif
 
 KBUILD_CPPFLAGS += $(CDEFINES)
 
@@ -97,10 +135,6 @@ KBUILD_EXTRA_SYMBOLS +=$(OUT)/obj/vendor/qcom/opensource/audio-kernel/asoc/codec
 KBUILD_EXTRA_SYMBOLS +=$(OUT)/obj/vendor/qcom/opensource/audio-kernel/soc/Module.symvers
 endif
 
-ifeq ($(CONFIG_SND_SOC_GCOV), y)
-GCOV_PROFILE := y
-endif
-
 # Module information used by KBuild framework
-obj-$(CONFIG_SND_SOC_MSM_SDW) += msm_sdw_dlkm.o
-msm_sdw_dlkm-y := $(MSM_SDW_OBJS)
+obj-$(CONFIG_SND_SOC_TFA9874)    += tfa98xx_dlkm.o
+tfa98xx_dlkm-y := $(TFA98XX_OBJS)
