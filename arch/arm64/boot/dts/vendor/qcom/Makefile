@@ -1,3 +1,4 @@
+ifeq (,,)
 ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
         dtbo-$(CONFIG_ARCH_KONA) += \
                 kona-cdp-overlay.dtbo \
@@ -282,6 +283,10 @@ sdm660-internal-codec-cdp.dtb \
         sdm660-usbc-audio-mtp.dtb \
         sdm660-usbc-audio-rcm.dtb
 endif
+endif
+
+dtbo-y += groot-v2-qrd-overlay.dtbo
+groot-v2-qrd-overlay.dtbo-base := lito-v2.dtb
 
 always		:= $(dtb-y)
 subdir-y	:= $(dts-dirs)
