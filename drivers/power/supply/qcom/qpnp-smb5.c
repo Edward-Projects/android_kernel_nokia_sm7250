@@ -879,6 +879,7 @@ static enum power_supply_property smb5_usb_props[] = {
 	POWER_SUPPLY_PROP_SKIN_HEALTH,
 	POWER_SUPPLY_PROP_APSD_RERUN,
 	POWER_SUPPLY_PROP_APSD_TIMEOUT,
+	POWER_SUPPLY_PROP_INPUT_SUSPEND,
 	POWER_SUPPLY_PROP_CHARGER_STATUS,
 	POWER_SUPPLY_PROP_INPUT_VOLTAGE_SETTLED,
 };
@@ -1031,6 +1032,9 @@ static int smb5_usb_get_prop(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_APSD_TIMEOUT:
 		val->intval = chg->apsd_ext_timeout;
 		break;
+	case POWER_SUPPLY_PROP_INPUT_SUSPEND:
+		smblib_get_usb_suspend(chg, &val->intval);
+		break;
 	case POWER_SUPPLY_PROP_CHARGER_STATUS:
 		val->intval = 0;
 		if (chg->sdam_base) {
@@ -1143,6 +1147,9 @@ static int smb5_usb_set_prop(struct power_supply *psy,
 		chg->apsd_ext_timeout = false;
 		smblib_rerun_apsd(chg);
 		break;
+	case POWER_SUPPLY_PROP_INPUT_SUSPEND:
+		smblib_set_usb_suspend(chg, val->intval);
+		break;
 	default:
 		pr_err("set prop %d is not supported\n", psp);
 		rc = -EINVAL;
@@ -1162,6 +1169,7 @@ static int smb5_usb_prop_is_writeable(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_VOLTAGE_MAX_LIMIT:
 	case POWER_SUPPLY_PROP_ADAPTER_CC_MODE:
 	case POWER_SUPPLY_PROP_APSD_RERUN:
+	case POWER_SUPPLY_PROP_INPUT_SUSPEND:
 		return 1;
 	default:
 		break;
@@ -1728,6 +1736,7 @@ static enum power_supply_property smb5_batt_props[] = {
 	POWER_SUPPLY_PROP_CHARGE_FULL_DESIGN,
 	POWER_SUPPLY_PROP_TIME_TO_FULL_NOW,
 	POWER_SUPPLY_PROP_FCC_STEPPER_ENABLE,
+	POWER_SUPPLY_PROP_CHARGING_ENABLED,
 };
 
 #define DEBUG_ACCESSORY_TEMP_DECIDEGC	250
@@ -1880,6 +1889,9 @@ static int smb5_batt_get_prop(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_FCC_STEPPER_ENABLE:
 		val->intval = chg->fcc_stepper_enable;
 		break;
+	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
+		rc = smblib_get_prop_battery_charging_enabled(chg, val);
+		break;
 	default:
 		pr_err("batt power supply prop %d not supported\n", psp);
 		return -EINVAL;
@@ -1987,6 +1999,9 @@ static int smb5_batt_set_prop(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_FCC_STEPPER_ENABLE:
 		chg->fcc_stepper_enable = val->intval;
 		break;
+	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
+		rc = smblib_set_prop_battery_charging_enabled(chg, val);
+		break;
 	default:
 		rc = -EINVAL;
 	}
@@ -2008,6 +2023,7 @@ static int smb5_batt_prop_is_writeable(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_INPUT_CURRENT_LIMITED:
 	case POWER_SUPPLY_PROP_STEP_CHARGING_ENABLED:
 	case POWER_SUPPLY_PROP_DIE_HEALTH:
+	case POWER_SUPPLY_PROP_CHARGING_ENABLED:
 		return 1;
 	default:
 		break;
@@ -2176,23 +2192,13 @@ static int smb5_configure_typec(struct smb_charger *chg)
 
 	smblib_apsd_enable(chg, true);
 
-	rc = smblib_read(chg, TYPE_C_SNK_STATUS_REG, &val);
+	rc = smblib_masked_write(chg, TYPE_C_CFG_REG,
+				BC1P2_START_ON_CC_BIT, 0);
 	if (rc < 0) {
-		dev_err(chg->dev, "failed to read TYPE_C_SNK_STATUS_REG rc=%d\n",
+		dev_err(chg->dev, "failed to write TYPE_C_CFG_REG rc=%d\n",
 				rc);
 
 		return rc;
-	}
-
-	if (!(val & SNK_DAM_MASK)) {
-		rc = smblib_masked_write(chg, TYPE_C_CFG_REG,
-					BC1P2_START_ON_CC_BIT, 0);
-		if (rc < 0) {
-			dev_err(chg->dev, "failed to write TYPE_C_CFG_REG rc=%d\n",
-					rc);
-
-			return rc;
-		}
 	}
 
 	/* Use simple write to clear interrupts */
@@ -2664,6 +2670,30 @@ static int smb5_init_connector_type(struct smb_charger *chg)
 
 }
 
+/* disable/enable the AFP  */
+static struct smb5 *s_chip_dev = NULL;
+void smb5_configure_afp_enable(int enable)
+{
+	int rc;
+	u8 val = 0, mask = 0;
+
+	if (1 == enable) {
+		mask = JEITA_EN_HOT_AFP_BIT | JEITA_EN_COLD_AFP_BIT;
+		val = JEITA_EN_HOT_AFP_BIT | JEITA_EN_COLD_AFP_BIT;
+	} else {
+		mask = JEITA_EN_HOT_AFP_BIT | JEITA_EN_COLD_AFP_BIT;
+		val = 0;
+	}
+
+	if (s_chip_dev) {
+		struct smb_charger *chg = &s_chip_dev->chg;
+
+		rc = smblib_masked_write(chg, JEITA_EN_CFG_REG, mask, val);
+		if (rc < 0)
+			dev_err(chg->dev, "Enable APF failed rc=%d\n", rc);
+	}
+}
+
 static int smb5_init_hw(struct smb5 *chip)
 {
 	struct smb_charger *chg = &chip->chg;
@@ -2755,6 +2785,23 @@ static int smb5_init_hw(struct smb5 *chip)
 		return rc;
 	}
 
+	/*To limit only QC2.0 to 9V*/
+	rc = smblib_masked_write(chg, HVDCP_PULSE_COUNT_MAX_REG,
+			HVDCP_PULSE_COUNT_MAX_QC2_MASK,
+			HVDCP_PULSE_COUNT_MAX_QC2_9V);
+	if (rc < 0)
+		dev_err(chg->dev, "Couldn't force max pulses to 9V rc=%d\n",
+				rc);
+
+	/*To change AICL threshold to 4.6V*/
+	rc = smblib_write(chg, USBIN_5V_AICL_THRESHOLD_REG, 0x6);
+	if (rc < 0)
+		dev_err(chg->dev, "Couldn't force AICL threshold to 4.6V rc=%d\n", rc);
+
+	rc = smblib_write(chg, USBIN_CONT_AICL_THRESHOLD_REG, 0x6);
+	if (rc < 0)
+		dev_err(chg->dev, "Couldn't force continuous AICL threshold to 4.6V rc=%d\n", rc);
+
 	/* Use ICL results from HW */
 	rc = smblib_icl_override(chg, HW_AUTO_MODE);
 	if (rc < 0) {
@@ -2793,6 +2840,9 @@ static int smb5_init_hw(struct smb5 *chip)
 	rc = smb5_init_dc_peripheral(chg);
 	if (rc < 0)
 		return rc;
+
+	/* enable the AFP start */
+	smb5_configure_afp_enable(1);
 
 	/*
 	 * AICL configuration: enable aicl and aicl rerun and based on DT
@@ -3631,6 +3681,7 @@ static int smb5_probe(struct platform_device *pdev)
 		goto cleanup;
 	}
 
+	s_chip_dev = chip;
 	rc = smb5_init_hw(chip);
 	if (rc < 0) {
 		pr_err("Couldn't initialize hardware rc=%d\n", rc);

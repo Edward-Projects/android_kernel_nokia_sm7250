@@ -138,6 +138,15 @@ config POWER_RESET_LTC2952
 	help
 	  This driver supports an external powerdown trigger and board power
 	  down via the LTC2952. Bindings are made in the device tree.
+config DLOAD_DEBUG
+	bool "enalbe dump in user version"
+	depends on POWER_RESET_QCOM
+	help
+		echo 1  > /sys/kernel/dload/dload_enable to enable dump.
+
+config RELEASE_VERSION
+	bool "release version is for user"
+	default n
 
 config POWER_RESET_QCOM
 	bool "Qualcomm Technologies, Inc. MSM power-off driver"
