@@ -1569,4 +1569,10 @@ endmenu
 config SERIAL_MCTRL_GPIO
 	tristate
 
+config DEBUG_SERIAL_CTRL
+	bool "control serial log print"
+	default n
+	help
+	  Say Y here if you need to control serial log
+
 endif # TTY
