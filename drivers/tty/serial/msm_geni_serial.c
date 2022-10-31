@@ -3000,6 +3000,10 @@ exit_ver_info:
 	return ret;
 }
 
+#ifdef CONFIG_DEBUG_SERIAL_CTRL
+extern int debug_serial_ctrl;
+#endif
+
 static int msm_geni_serial_probe(struct platform_device *pdev)
 {
 	int ret = 0;
@@ -3029,6 +3033,13 @@ static int msm_geni_serial_probe(struct platform_device *pdev)
 			line = of_alias_get_id(pdev->dev.of_node, "serial");
 			if (line < 0)
 				line = 0;
+
+#ifdef CONFIG_DEBUG_SERIAL_CTRL
+			if ((debug_serial_ctrl == 0) && (!line)) {
+				pr_err("Disable Debug Serial log print\n");
+				return -ENODEV;
+			}
+#endif
 		} else {
 			line = of_alias_get_id(pdev->dev.of_node, "hsuart");
 			if (line < 0)
