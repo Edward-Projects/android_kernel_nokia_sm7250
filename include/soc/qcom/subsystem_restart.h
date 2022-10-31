@@ -143,7 +143,9 @@ struct notif_data {
 };
 
 #if defined(CONFIG_MSM_SUBSYSTEM_RESTART)
-
+#ifdef CONFIG_DLOAD_DEBUG
+extern void set_subsys_restart_level(int level);
+#endif /*CONFIG_DLOAD_DEBUG*/
 extern int subsys_get_restart_level(struct subsys_device *dev);
 extern int subsystem_restart_dev(struct subsys_device *dev);
 extern int subsystem_restart(const char *name);
