@@ -1060,6 +1060,18 @@ static void mask_scsr_irqs(struct pil_tz_data *d)
 			~BIT(d->bits_arr[PBL_DONE]), d->irq_mask);
 }
 
+struct pil_tz_data *modem_pdata = NULL;
+void restart_modem_by_sysnode(void)
+{
+	if (modem_pdata) {
+		pr_info("manual restart modem\n");
+		subsystem_restart_dev(modem_pdata->subsys);
+		return;
+	}
+
+	pr_err("%s: modem_pdata is NULL\n", __func__);
+}
+
 static int pil_tz_driver_probe(struct platform_device *pdev)
 {
 	struct pil_tz_data *d;
@@ -1261,6 +1273,11 @@ static int pil_tz_driver_probe(struct platform_device *pdev)
 	if (IS_ERR(d->subsys)) {
 		rc = PTR_ERR(d->subsys);
 		goto err_subsys;
+	}
+
+	if (d->pas_id == PAS_MODEM_SW) {
+		pr_err("create restart mode node\n");
+		modem_pdata = d;
 	}
 
 	return 0;
