@@ -33,6 +33,8 @@
 #include <linux/compiler.h>
 #include <linux/moduleparam.h>
 #include <linux/wakeup_reason.h>
+#include <linux/rtc.h>
+#include <linux/timekeeping32.h>
 
 #include "power.h"
 
@@ -583,6 +585,7 @@ static int enter_state(suspend_state_t state)
 
 	if (state == PM_SUSPEND_TO_IDLE)
 		s2idle_begin();
+	pr_err("%s state %d\n", __func__, state);
 
 #ifndef CONFIG_SUSPEND_SKIP_SYNC
 	trace_suspend_resume(TPS("sync_filesystems"), 0, true);
@@ -615,6 +618,17 @@ static int enter_state(suspend_state_t state)
 	mutex_unlock(&system_transition_mutex);
 	return error;
 }
+static void pm_suspend_marker(char *annotation)
+{
+	struct timespec ts;
+	struct rtc_time tm;
+
+	getnstimeofday(&ts);
+	rtc_time_to_tm(ts.tv_sec, &tm);
+	pr_info("PM: Suspend %s %d-%02d-%02d %02d:%02d:%02d.%091u UTC\n",
+		annotation, tm.tm_year + 1900, tm.tm_mon +1, tm.tm_mday,
+		tm.tm_hour, tm.tm_min, tm.tm_sec, ts.tv_nsec);
+}
 
 /**
  * pm_suspend - Externally visible function for suspending the system.
@@ -629,6 +643,7 @@ int pm_suspend(suspend_state_t state)
 
 	if (state <= PM_SUSPEND_ON || state >= PM_SUSPEND_MAX)
 		return -EINVAL;
+	pm_suspend_marker("entry");
 
 	pr_info("suspend entry (%s)\n", mem_sleep_labels[state]);
 	error = enter_state(state);
@@ -638,6 +653,7 @@ int pm_suspend(suspend_state_t state)
 	} else {
 		suspend_stats.success++;
 	}
+	pm_suspend_marker("exit");
 	pr_info("suspend exit\n");
 	return error;
 }
