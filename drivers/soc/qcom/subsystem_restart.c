@@ -1804,7 +1804,25 @@ static void init_all_completions(struct subsys_device *subsys_dev)
 	init_completion(&subsys_dev->err_ready);
 	init_completion(&subsys_dev->shutdown_ack);
 }
-
+#ifdef CONFIG_DLOAD_DEBUG
+void set_subsys_restart_level(int level)
+{
+	struct subsys_device *subsys;
+	if (level != RESET_SUBSYS_COUPLED && level != RESET_SOC) {
+		pr_err("%s invalid restart level %d\n", __func__, level);
+		return;
+	}
+	mutex_lock(&subsys_list_lock);
+	list_for_each_entry(subsys, &subsys_list, list) {
+		if (subsys != NULL) {
+			pr_info("%s %s set restart level %d\n", __func__, subsys->desc->name, level);
+			subsys->restart_level = level;
+		}
+	}
+	mutex_unlock(&subsys_list_lock);
+}
+EXPORT_SYMBOL(set_subsys_restart_level);
+#endif /*CONFIG_DLOAD_DEBUG*/
 struct subsys_device *subsys_register(struct subsys_desc *desc)
 {
 	struct subsys_device *subsys;
@@ -1852,6 +1870,11 @@ struct subsys_device *subsys_register(struct subsys_desc *desc)
 	}
 
 	dev_set_name(&subsys->dev, "subsys%d", subsys->id);
+#ifdef CONFIG_RELEASE_VERSION
+	subsys->restart_level = RESET_SUBSYS_COUPLED;
+#else /*CONFIG_RELEASE_VERSION*/
+	subsys->restart_level = RESET_SOC;
+#endif /*CONFIG_RELEASE_VERSION*/
 
 	mutex_init(&subsys->track.lock);
 	init_all_completions(subsys);
