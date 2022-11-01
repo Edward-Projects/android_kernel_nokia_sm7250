@@ -549,6 +549,12 @@ CONFIG_ARM_QCOM_CPUFREQ_HW=y
 # CONFIG_QORIQ_CPUFREQ is not set
 
 #
+# Qualcomm RmNet extensions
+#
+CONFIG_RMNET_PERF=y
+CONFIG_RMNET_SHS=y
+
+#
 # Firmware Drivers
 #
 CONFIG_ARM_PSCI_FW=y
