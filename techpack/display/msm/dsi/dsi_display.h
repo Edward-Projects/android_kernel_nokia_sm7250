@@ -204,6 +204,7 @@ struct dsi_display {
 	int disp_te_gpio;
 	bool is_te_irq_enabled;
 	struct completion esd_te_gate;
+	bool esd_te_get;
 
 	u32 ctrl_count;
 	struct dsi_display_ctrl ctrl[MAX_DSI_CTRLS_PER_DISPLAY];
@@ -233,6 +234,9 @@ struct dsi_display {
 	struct dsi_lane_map lane_map;
 	int cmdline_topology;
 	int cmdline_timing;
+#if defined(CONFIG_PXLW_IRIS3)
+	int cmdline_iris_mode;
+#endif
 	bool is_tpg_enabled;
 	bool poms_pending;
 	bool ulps_enabled;

@@ -707,6 +707,14 @@ do { \
 		(p)->feature = feature; \
 		(p)->val = val; \
 	} while (0)
+#if defined(CONFIG_PXLW_IRIS3)
+#include "dsi_iris3_api.h"
+
+static int iris3_pcc_ops = SDE_CP_CRTC_DSPP_MAX;
+static bool iris3_pcc_dirty = false;
+struct sde_cp_node *iris3_prop_node[SDE_CP_CRTC_DSPP_MAX] = {};
+#endif
+
 
 static void sde_cp_get_hw_payload(struct sde_cp_node *prop_node,
 				  struct sde_hw_cp_cfg *hw_cfg,
@@ -948,6 +956,10 @@ void sde_cp_crtc_init(struct drm_crtc *crtc)
 	spin_lock_init(&sde_crtc->ltm_lock);
 	INIT_LIST_HEAD(&sde_crtc->ltm_buf_free);
 	INIT_LIST_HEAD(&sde_crtc->ltm_buf_busy);
+#if defined(CONFIG_PXLW_IRIS3)
+	iris3_pcc_ops = SDE_CP_CRTC_DSPP_MAX;
+	memset(iris3_prop_node, 0, sizeof(iris3_prop_node));
+#endif
 }
 
 static void sde_cp_crtc_install_immutable_property(struct drm_crtc *crtc,
@@ -1225,11 +1237,38 @@ static void sde_cp_crtc_setfeature(struct sde_cp_node *prop_node,
 			hw_cfg.mixer_info = hw_lm;
 			hw_cfg.displayh = num_mixers * hw_lm->cfg.out_width;
 			hw_cfg.displayv = hw_lm->cfg.out_height;
+#if defined(CONFIG_PXLW_IRIS3)
+			switch (prop_node->feature) {
+			case SDE_CP_CRTC_DSPP_PCC:
+				if (hw_dspp && hw_dspp->ops.setup_pcc) {
+					if (iris3_pcc_ops == SDE_CP_CRTC_DSPP_PCC)
+						hw_cfg.payload = NULL;
+				}
+				break;
+			case SDE_CP_CRTC_DSPP_IGC:
+				if (hw_dspp && hw_dspp->ops.setup_igc) {
+					if (iris3_pcc_ops == SDE_CP_CRTC_DSPP_PCC)
+						hw_cfg.payload = NULL;
+				}
+				break;
+			case SDE_CP_CRTC_DSPP_GC:
+				if (hw_dspp && hw_dspp->ops.setup_gc) {
+					if (iris3_pcc_ops == SDE_CP_CRTC_DSPP_PCC)
+						hw_cfg.payload = NULL;
+				}
+				break;
+			}
+#endif
 
 			ret = set_feature(hw_dspp, &hw_cfg, sde_crtc);
 			if (ret)
 				break;
 		}
+
+#if defined(CONFIG_PXLW_IRIS3)
+			if (!ret)
+				iris3_prop_node[prop_node->feature] = prop_node;
+#endif
 
 		if (ret) {
 			DRM_ERROR("failed to %s feature %d\n",
@@ -1237,6 +1276,14 @@ static void sde_cp_crtc_setfeature(struct sde_cp_node *prop_node,
 				prop_node->feature);
 			return;
 		}
+
+		#if defined(CONFIG_PXLW_IRIS3)
+			if (iris3_pcc_dirty) {
+				DRM_DEBUG_DRIVER("Not update list to feature %d\n",
+					prop_node->feature);
+				return;
+			}
+		#endif
 	}
 
 	if (feature_enabled) {
@@ -1279,7 +1326,18 @@ void sde_cp_crtc_apply_properties(struct drm_crtc *crtc)
 	}
 
 	mutex_lock(&sde_crtc->crtc_cp_lock);
-
+#if defined(CONFIG_PXLW_IRIS3)
+	iris3_pcc_dirty = false;
+	if (iris3_hdr_enable_get() > 0 && iris3_pcc_ops == SDE_CP_CRTC_DSPP_MAX) {
+		DRM_INFO("Iris sdr2hdr - start\n");
+		iris3_pcc_ops = SDE_CP_CRTC_DSPP_PCC;
+		iris3_pcc_dirty = true;
+	} else if (iris3_hdr_enable_get() == 0 && iris3_pcc_ops == SDE_CP_CRTC_DSPP_PCC) {
+		DRM_INFO("Iris sdr2hdr - end\n");
+		iris3_pcc_ops = SDE_CP_CRTC_DSPP_MAX;
+		iris3_pcc_dirty = true;
+	}
+#endif
 	/* Check if dirty lists are empty and ad features are disabled for
 	 * early return. If ad properties are active then we need to issue
 	 * dspp flush.
@@ -1288,6 +1346,9 @@ void sde_cp_crtc_apply_properties(struct drm_crtc *crtc)
 		list_empty(&sde_crtc->ad_dirty)) {
 		if (list_empty(&sde_crtc->ad_active)) {
 			DRM_DEBUG_DRIVER("Dirty list is empty\n");
+#if defined(CONFIG_PXLW_IRIS3)
+			if (!iris3_pcc_dirty)
+#endif
 			goto exit;
 		}
 		set_dspp_flush = true;
@@ -1305,6 +1366,22 @@ void sde_cp_crtc_apply_properties(struct drm_crtc *crtc)
 		else
 			set_lm_flush = true;
 	}
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_pcc_dirty) {
+		for (i = 0; i < SDE_CP_CRTC_DSPP_MAX; i++) {
+			prop_node = iris3_prop_node[i];
+			if (prop_node == NULL)
+				continue;
+			sde_cp_crtc_setfeature(prop_node, sde_crtc);
+			/* Set the flush flag to true */
+			if (prop_node->is_dspp_feature)
+				set_dspp_flush = true;
+			else
+				set_lm_flush = true;
+		}
+		iris3_pcc_dirty = false;
+	}
+#endif
 
 	list_for_each_entry_safe(prop_node, n, &sde_crtc->ad_dirty,
 				dirty_list) {
@@ -1616,6 +1693,11 @@ void sde_cp_crtc_suspend(struct drm_crtc *crtc)
 		sde_cp_update_list(prop_node, sde_crtc, true);
 		list_del_init(&prop_node->active_list);
 	}
+#if defined(CONFIG_PXLW_IRIS3)
+	iris3_pcc_ops = SDE_CP_CRTC_DSPP_MAX;
+	memset(iris3_prop_node, 0, sizeof(iris3_prop_node));
+#endif
+
 
 	list_for_each_entry_safe(prop_node, n, &sde_crtc->ad_active,
 				 active_list) {

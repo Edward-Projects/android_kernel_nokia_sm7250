@@ -101,6 +101,18 @@ msm_drm-$(CONFIG_DRM_MSM_DSI) += dsi/dsi_phy.o \
 	dsi/dsi_clk_manager.o \
 	dsi/dsi_display_test.o \
 
+ifeq ($(CONFIG_PXLW_IRIS3),y)
+msm_drm-$(CONFIG_DRM_MSM_DSI) += dsi/dsi_iris3_ioctl.o \
+	dsi/dsi_iris3_lightup.o \
+	dsi/dsi_iris3_lightup_ocp.o \
+	dsi/dsi_iris3_lp.o \
+	dsi/dsi_iris3_lut.o \
+	dsi/dsi_iris3_pq.o \
+	dsi/dsi_iris3_i2c.o
+ccflags-y += -DCONFIG_PXLW_IRIS3
+endif
+
+
 msm_drm-$(CONFIG_DSI_PARSER) += dsi/dsi_parser.o \
 
 msm_drm-$(CONFIG_DRM_MSM) += \

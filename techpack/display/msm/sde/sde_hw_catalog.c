@@ -1213,7 +1213,6 @@ static void _sde_sspp_setup_vig(struct sde_mdss_cfg *sde_cfg,
 
 	if (PROP_VALUE_ACCESS(prop_value, VIG_INVERSE_PMA, 0))
 		set_bit(SDE_SSPP_INVERSE_PMA, &sspp->features);
-
 	if (sde_cfg->true_inline_rot_rev > 0) {
 		set_bit(SDE_SSPP_TRUE_INLINE_ROT, &sspp->features);
 		sblk->in_rot_format_list = sde_cfg->inline_rot_formats;

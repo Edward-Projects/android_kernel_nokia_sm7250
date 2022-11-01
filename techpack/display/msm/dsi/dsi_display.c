@@ -21,6 +21,12 @@
 #include "sde_dbg.h"
 #include "dsi_parser.h"
 
+#if defined(CONFIG_PXLW_IRIS3)
+#include "dsi_iris3_api.h"
+#include "dsi_iris3_lightup.h"
+#include "dsi_iris3_lp.h"
+#endif
+
 #define to_dsi_display(x) container_of(x, struct dsi_display, host)
 #define INT_BASE_10 10
 
@@ -32,6 +38,12 @@
 
 #define DSI_CLOCK_BITRATE_RADIX 10
 #define MAX_TE_SOURCE_ID  2
+#if defined(CONFIG_PXLW_IRIS3)
+DEFINE_MUTEX(dsi_display_clk_mutex);
+#endif
+
+int lcd_recovery_flag = 0;
+EXPORT_SYMBOL(lcd_recovery_flag);
 
 static char dsi_display_primary[MAX_CMDLINE_PARAM_LEN];
 static char dsi_display_secondary[MAX_CMDLINE_PARAM_LEN];
@@ -400,12 +412,14 @@ static irqreturn_t dsi_display_panel_te_irq_handler(int irq, void *data)
 	 */
 	if (!display)
 		return IRQ_HANDLED;
-
+	DSI_ERR(" --> %s \n", __func__);
 	SDE_EVT32(SDE_EVTLOG_FUNC_CASE1);
-	complete_all(&display->esd_te_gate);
+	//complete_all(&display->esd_te_gate);
+	display->esd_te_get = 1;
 	return IRQ_HANDLED;
 }
 
+#ifdef CONFIG_DEBUG_FS
 static void dsi_display_change_te_irq_status(struct dsi_display *display,
 					bool enable)
 {
@@ -423,6 +437,7 @@ static void dsi_display_change_te_irq_status(struct dsi_display *display,
 		display->is_te_irq_enabled = false;
 	}
 }
+#endif /* CONFIG_DEBUG_FS */
 
 static void dsi_display_register_te_irq(struct dsi_display *display)
 {
@@ -455,7 +470,7 @@ static void dsi_display_register_te_irq(struct dsi_display *display)
 	irq_set_status_flags(te_irq, IRQ_DISABLE_UNLAZY);
 
 	rc = devm_request_irq(dev, te_irq, dsi_display_panel_te_irq_handler,
-			      IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+			      IRQF_TRIGGER_RISING | IRQF_ONESHOT,
 			      "TE_GPIO", display);
 	if (rc) {
 		DSI_ERR("TE request_irq failed for ESD rc:%d\n", rc);
@@ -463,9 +478,9 @@ static void dsi_display_register_te_irq(struct dsi_display *display)
 		goto error;
 	}
 
-	disable_irq(te_irq);
-	display->is_te_irq_enabled = false;
-
+	enable_irq(te_irq);
+	display->is_te_irq_enabled = true;
+	display->esd_te_get = 0;
 	return;
 
 error:
@@ -482,7 +497,13 @@ static int dsi_host_alloc_cmd_tx_buffer(struct dsi_display *display)
 	struct dsi_display_ctrl *display_ctrl;
 
 	display->tx_cmd_buf = msm_gem_new(display->drm_dev,
+
+#if defined(CONFIG_PXLW_IRIS3)
+			SZ_256K,
+#else
 			SZ_4K,
+#endif
+
 			MSM_BO_UNCACHED);
 
 	if ((display->tx_cmd_buf) == NULL) {
@@ -491,7 +512,11 @@ static int dsi_host_alloc_cmd_tx_buffer(struct dsi_display *display)
 		goto error;
 	}
 
+#if defined(CONFIG_PXLW_IRIS3)
+	display->cmd_buffer_size = SZ_256K;
+#else
 	display->cmd_buffer_size = SZ_4K;
+#endif
 
 	display->aspace = msm_gem_smmu_address_space_get(
 			display->drm_dev, MSM_SMMU_DOMAIN_UNSECURE);
@@ -525,7 +550,13 @@ static int dsi_host_alloc_cmd_tx_buffer(struct dsi_display *display)
 
 	display_for_each_ctrl(cnt, display) {
 		display_ctrl = &display->ctrl[cnt];
+
+#if defined(CONFIG_PXLW_IRIS3)
+		display_ctrl->ctrl->cmd_buffer_size = SZ_256K;
+#else
 		display_ctrl->ctrl->cmd_buffer_size = SZ_4K;
+#endif
+
 		display_ctrl->ctrl->cmd_buffer_iova =
 					display->cmd_buffer_iova;
 		display_ctrl->ctrl->vaddr = display->vaddr;
@@ -761,18 +792,17 @@ static int dsi_display_status_bta_request(struct dsi_display *display)
 static int dsi_display_status_check_te(struct dsi_display *display)
 {
 	int rc = 1;
-	int const esd_te_timeout = msecs_to_jiffies(3*20);
+	//int const esd_te_timeout = msecs_to_jiffies(3*20);
 
-	dsi_display_change_te_irq_status(display, true);
-
+	//dsi_display_change_te_irq_status(display, true);
 	reinit_completion(&display->esd_te_gate);
-	if (!wait_for_completion_timeout(&display->esd_te_gate,
-				esd_te_timeout)) {
+	if ((1 == display->esd_te_get) || (1 == lcd_recovery_flag)) {
 		DSI_ERR("TE check failed\n");
+		DSI_ERR("display->esd_te_get = %d, lcd_recovery_flag = %d\n", display->esd_te_get, lcd_recovery_flag);
 		rc = -EINVAL;
 	}
 
-	dsi_display_change_te_irq_status(display, false);
+	//dsi_display_change_te_irq_status(display, false);
 
 	return rc;
 }
@@ -860,9 +890,11 @@ exit:
 release_panel_lock:
 	dsi_panel_release_panel_lock(panel);
 	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT, rc);
-
+	dsi_display->esd_te_get = 0;
+	lcd_recovery_flag = 0;
 	return rc;
 }
+
 
 static int dsi_display_cmd_prepare(const char *cmd_buf, u32 cmd_buf_len,
 		struct dsi_cmd_desc *cmd, u8 *payload, u32 payload_len)
@@ -2189,6 +2221,11 @@ static void dsi_display_parse_cmdline_topology(struct dsi_display *display,
 	if (sw_te)
 		display->sw_te_using_wd = true;
 
+#if defined(CONFIG_PXLW_IRIS3)
+	iris3_set_mode_from_cmdline(display, boot_str);
+#endif
+
+
 	str = strnstr(boot_str, ":config", strlen(boot_str));
 	if (str) {
 		if (sscanf(str, ":config%lu", &cmdline_topology) != 1) {
@@ -2934,6 +2971,17 @@ static ssize_t dsi_host_transfer(struct mipi_dsi_host *host,
 	} else {
 		int ctrl_idx = (msg->flags & MIPI_DSI_MSG_UNICAST) ?
 				msg->ctrl : 0;
+#if defined(CONFIG_PXLW_IRIS3)
+		u32 flags = DSI_CTRL_CMD_FETCH_MEMORY | DSI_CTRL_CMD_CUSTOM_DMA_SCHED;
+		if (msg->rx_buf && msg->rx_len)
+			flags |= DSI_CTRL_CMD_READ;
+		if (display->queue_cmd_waits)
+			flags |= DSI_CTRL_CMD_ASYNC_WAIT;
+
+		rc = dsi_ctrl_cmd_transfer(display->ctrl[ctrl_idx].ctrl, msg,
+					  &flags);
+		if (rc < 0) {
+#else
 		u32 cmd_flags = DSI_CTRL_CMD_FETCH_MEMORY;
 
 		if (display->queue_cmd_waits ||
@@ -2943,6 +2991,7 @@ static ssize_t dsi_host_transfer(struct mipi_dsi_host *host,
 		rc = dsi_ctrl_cmd_transfer(display->ctrl[ctrl_idx].ctrl, msg,
 				&cmd_flags);
 		if (rc) {
+#endif
 			DSI_ERR("[%s] cmd transfer failed, rc=%d\n",
 			       display->name, rc);
 			goto error_disable_cmd_engine;
@@ -3804,6 +3853,11 @@ static int dsi_display_res_init(struct dsi_display *display)
 		display->panel = NULL;
 		goto error_ctrl_put;
 	}
+
+#if defined(CONFIG_PXLW_IRIS3)
+	iris3_parse_params(display->panel_node, display->panel);
+	iris3_init(display, display->panel);
+#endif
 
 	display_for_each_ctrl(i, display) {
 		struct msm_dsi_phy *phy = display->ctrl[i].phy;
@@ -7279,6 +7333,10 @@ error_panel_post_unprep:
 error:
 	mutex_unlock(&display->display_lock);
 	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT);
+#if defined(CONFIG_PXLW_IRIS3)
+	iris3_display_prepare(display);
+#endif
+
 	return rc;
 }
 
@@ -7566,6 +7624,9 @@ int dsi_display_enable(struct dsi_display *display)
 	if (display->is_cont_splash_enabled) {
 
 		dsi_display_config_ctrl_for_cont_splash(display);
+#if defined(CONFIG_PXLW_IRIS3)
+		iris3_display_enable(display);
+#endif
 
 		rc = dsi_display_splash_res_cleanup(display);
 		if (rc) {

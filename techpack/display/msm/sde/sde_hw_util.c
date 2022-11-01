@@ -10,6 +10,7 @@
 #include "sde_hw_mdss.h"
 #include "sde_hw_util.h"
 
+
 /* using a file static variables for debugfs access */
 static u32 sde_hw_util_log_mask = SDE_DBG_MASK_NONE;
 

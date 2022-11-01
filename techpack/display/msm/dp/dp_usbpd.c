@@ -240,6 +240,10 @@ static void dp_usbpd_connect_cb(struct usbpd_svid_handler *hdlr,
 {
 	struct dp_usbpd_private *pd;
 
+	/*Hardware dose not support displayport
+	  So return to solve system crash.*/
+	return;
+
 	pd = container_of(hdlr, struct dp_usbpd_private, svid_handler);
 	if (!pd) {
 		DP_ERR("get_usbpd phandle failed\n");

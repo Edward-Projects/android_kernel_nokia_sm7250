@@ -39,6 +39,10 @@
 #include "sde_core_irq.h"
 #include "sde_hw_top.h"
 #include "sde_hw_qdss.h"
+#if defined(CONFIG_PXLW_IRIS3)
+#include "dsi_iris3_api.h"
+#endif
+
 
 #define SDE_DEBUG_ENC(e, fmt, ...) SDE_DEBUG("enc%d " fmt,\
 		(e) ? (e)->base.base.id : -1, ##__VA_ARGS__)
@@ -4810,6 +4814,9 @@ int sde_encoder_prepare_for_kickoff(struct drm_encoder *drm_enc,
 	/* if any phys needs reset, reset all phys, in-order */
 	if (needs_hw_reset)
 		sde_encoder_needs_hw_reset(drm_enc);
+#if defined(CONFIG_PXLW_IRIS3)
+	iris3_prepare_for_kickoff();
+#endif
 
 	_sde_encoder_update_master(drm_enc, params);
 
@@ -4905,6 +4912,10 @@ void sde_encoder_kickoff(struct drm_encoder *drm_enc, bool is_error)
 	/* create a 'no pipes' commit to release buffers on errors */
 	if (is_error)
 		_sde_encoder_reset_ctl_hw(drm_enc);
+#if defined(CONFIG_PXLW_IRIS3)
+	iris3_kickoff();
+#endif
+
 
 	/* All phys encs are ready to go, trigger the kickoff */
 	_sde_encoder_kickoff_phys(sde_enc);
@@ -6180,3 +6191,28 @@ void sde_encoder_recovery_events_handler(struct drm_encoder *encoder,
 	sde_enc = to_sde_encoder_virt(encoder);
 	sde_enc->recovery_events_enabled = enabled;
 }
+#if defined(CONFIG_PXLW_IRIS3)
+void sde_encoder_rc_lock(struct drm_encoder *drm_enc)
+{
+	struct sde_encoder_virt *sde_enc;
+
+	if (!drm_enc || !drm_enc->dev || !drm_enc->dev->dev_private) {
+		SDE_ERROR("invalid encoder\n");
+		return;
+	}
+	sde_enc = to_sde_encoder_virt(drm_enc);
+	mutex_lock(&sde_enc->rc_lock);
+}
+
+void sde_encoder_rc_unlock(struct drm_encoder *drm_enc)
+{
+	struct sde_encoder_virt *sde_enc;
+
+	if (!drm_enc || !drm_enc->dev || !drm_enc->dev->dev_private) {
+		SDE_ERROR("invalid encoder\n");
+		return;
+	}
+	sde_enc = to_sde_encoder_virt(drm_enc);
+	mutex_unlock(&sde_enc->rc_lock);
+}
+#endif

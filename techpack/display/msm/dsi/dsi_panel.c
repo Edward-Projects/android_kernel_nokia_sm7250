@@ -9,11 +9,29 @@
 #include <linux/of_gpio.h>
 #include <linux/pwm.h>
 #include <video/mipi_display.h>
+#include <linux/string.h>
 
 #include "dsi_panel.h"
 #include "dsi_ctrl_hw.h"
 #include "dsi_parser.h"
 #include "sde_dbg.h"
+#include <linux/proc_fs.h>
+#include <asm/uaccess.h>
+#include <linux/hqsysfs.h>
+
+#ifdef CONFIG_TOUCH_ILI7881X_TDDI
+extern int tp_supend_need_power_reset_high(void);
+extern void ili_resume_by_ddi(void);
+extern void tp_gesture_force_recover(bool force);
+#endif
+
+#if defined(CONFIG_PXLW_IRIS3)
+#include "dsi_iris3_api.h"
+#include "dsi_iris3_lp.h"
+#endif
+
+extern void tp_reset_for_lcd_use(void);
+extern int tp_supend_need_power_reset_high(void);
 
 /**
  * topology is currently defined by a set of following 3 values:
@@ -32,6 +50,10 @@
 #define MAX_PANEL_JITTER		10
 #define DEFAULT_PANEL_PREFILL_LINES	25
 #define MIN_PREFILL_LINES      35
+
+int vreg_name_vdd = 0;
+
+static int calibrate_state = 0;
 
 enum dsi_dsc_ratio_type {
 	DSC_8BPC_8BPP,
@@ -224,6 +246,9 @@ static int dsi_panel_vreg_get(struct dsi_panel *panel)
 			       panel->power_info.vregs[i].vreg_name);
 			goto error_put;
 		}
+		if(!strcmp(panel->power_info.vregs[i].vreg_name, "vdd")){
+			vreg_name_vdd = i;
+		}
 		panel->power_info.vregs[i].vreg = vreg;
 	}
 
@@ -294,7 +319,31 @@ static int dsi_panel_gpio_request(struct dsi_panel *panel)
 		}
 	}
 
+	if (gpio_is_valid(r_config->pw8418_rst_gpio)) {
+		rc = gpio_request(r_config->pw8418_rst_gpio, "pw8418_rst_gpio");
+		if (rc) {
+			DSI_WARN("request for pw8418_rst_gpio failed, rc=%d\n",
+				 rc);
+			goto error_release_pw8418_rst_gpio;
+		}
+	}
+
+	if (gpio_is_valid(r_config->tp_rst_gpio)) {
+		rc = gpio_request(r_config->tp_rst_gpio, "tp_rst_gpio");
+		if (rc) {
+			DSI_WARN("request for tp_rst_gpio failed, rc=%d\n",
+				 rc);
+			goto error_release_tp_rst_gpio;
+		}
+	}
+
 	goto error;
+error_release_tp_rst_gpio:
+	if (gpio_is_valid(r_config->tp_rst_gpio))
+		gpio_free(r_config->tp_rst_gpio);
+error_release_pw8418_rst_gpio:
+	if (gpio_is_valid(r_config->pw8418_rst_gpio))
+		gpio_free(r_config->pw8418_rst_gpio);
 error_release_mode_sel:
 	if (gpio_is_valid(panel->bl_config.en_gpio))
 		gpio_free(panel->bl_config.en_gpio);
@@ -318,6 +367,12 @@ static int dsi_panel_gpio_release(struct dsi_panel *panel)
 
 	if (gpio_is_valid(r_config->disp_en_gpio))
 		gpio_free(r_config->disp_en_gpio);
+
+	if (gpio_is_valid(r_config->tp_rst_gpio))
+		gpio_free(r_config->tp_rst_gpio);
+
+	if (gpio_is_valid(r_config->pw8418_rst_gpio))
+		gpio_free(r_config->pw8418_rst_gpio);
 
 	if (gpio_is_valid(panel->bl_config.en_gpio))
 		gpio_free(panel->bl_config.en_gpio);
@@ -450,26 +505,89 @@ static int dsi_panel_set_pinctrl_state(struct dsi_panel *panel, bool enable)
 static int dsi_panel_power_on(struct dsi_panel *panel)
 {
 	int rc = 0;
-
-	rc = dsi_pwr_enable_regulator(&panel->power_info, true);
-	if (rc) {
-		DSI_ERR("[%s] failed to enable vregs, rc=%d\n",
-				panel->name, rc);
-		goto exit;
+#ifdef CONFIG_TOUCH_ILI7881X_TDDI
+	if (!tp_supend_need_power_reset_high()) {
+#endif
+		rc = dsi_pwr_enable_regulator(&panel->power_info, true);
+		if (rc) {
+			DSI_ERR("[%s] failed to enable vregs, rc=%d\n",
+					panel->name, rc);
+			goto exit;
+		}
+#ifdef CONFIG_TOUCH_ILI7881X_TDDI
 	}
-
+	else
+	{
+		rc = regulator_enable(panel->power_info.vregs[vreg_name_vdd].vreg);
+		if (rc){
+			DSI_ERR("[%s] failed to enable vregs, rc=%d\n",
+					panel->name, rc);
+			goto exit;
+		}
+	}
+#endif
 	rc = dsi_panel_set_pinctrl_state(panel, true);
 	if (rc) {
 		DSI_ERR("[%s] failed to set pinctrl, rc=%d\n", panel->name, rc);
 		goto error_disable_vregs;
 	}
 
+	if (!IS_ERR(panel->bb_clk2)) {
+		clk_prepare_enable(panel->bb_clk2);
+		DSI_INFO("[%s] enable bb_clk2\n", panel->name);
+	}
+	usleep_range(10000, 10000);
+	if (gpio_is_valid(panel->reset_config.pw8418_rst_gpio)) {
+		rc = gpio_direction_output(panel->reset_config.pw8418_rst_gpio, 0);
+		msleep(10);
+		rc = gpio_direction_output(panel->reset_config.pw8418_rst_gpio, 1);
+		msleep(10);
+		rc = gpio_direction_output(panel->reset_config.pw8418_rst_gpio, 1);
+		if (rc) {
+			DSI_ERR("[%s] failed to set pw8418 rst gpio, rc=%d\n", panel->name, rc);
+		}
+		msleep(10);
+	}
+#if !defined(CONFIG_PXLW_IRIS3)
 	rc = dsi_panel_reset(panel);
 	if (rc) {
 		DSI_ERR("[%s] failed to reset panel, rc=%d\n", panel->name, rc);
 		goto error_disable_gpio;
 	}
+#endif
+#ifdef CONFIG_TOUCH_ILI7881X_TDDI
+	tp_gesture_force_recover(true);
+#endif
+	goto exit;
 
+#if !defined(CONFIG_PXLW_IRIS3)
+error_disable_gpio:
+	if (gpio_is_valid(panel->reset_config.disp_en_gpio))
+		gpio_set_value(panel->reset_config.disp_en_gpio, 0);
+
+	if (gpio_is_valid(panel->bl_config.en_gpio))
+		gpio_set_value(panel->bl_config.en_gpio, 0);
+
+	(void)dsi_panel_set_pinctrl_state(panel, false);
+#endif
+error_disable_vregs:
+	(void)dsi_pwr_enable_regulator(&panel->power_info, false);
+
+exit:
+	return rc;
+}
+#if defined(CONFIG_PXLW_IRIS3)
+int dsi_panel_reset_delay(struct dsi_panel *panel)
+{
+	int rc = 0;
+	rc = dsi_panel_reset(panel);
+	if (rc) {
+		DSI_ERR("[%s] failed to reset panel, rc=%d\n", panel->name, rc);
+		goto error_disable_gpio;
+	}
+#ifdef CONFIG_TOUCH_ILI7881X_TDDI
+        ili_resume_by_ddi();
+#endif
 	goto exit;
 
 error_disable_gpio:
@@ -480,47 +598,75 @@ error_disable_gpio:
 		gpio_set_value(panel->bl_config.en_gpio, 0);
 
 	(void)dsi_panel_set_pinctrl_state(panel, false);
-
-error_disable_vregs:
 	(void)dsi_pwr_enable_regulator(&panel->power_info, false);
 
 exit:
 	return rc;
 }
-
+#endif
 static int dsi_panel_power_off(struct dsi_panel *panel)
 {
 	int rc = 0;
+#ifdef CONFIG_TOUCH_ILI7881X_TDDI
+	if (atomic_read(&panel->esd_recovery_pending))
+		tp_gesture_force_recover(false);
+	if (!tp_supend_need_power_reset_high()) {
+#endif
+		if (gpio_is_valid(panel->reset_config.disp_en_gpio))
+			gpio_set_value(panel->reset_config.disp_en_gpio, 0);
 
-	if (gpio_is_valid(panel->reset_config.disp_en_gpio))
-		gpio_set_value(panel->reset_config.disp_en_gpio, 0);
+		msleep(180);
+		if (gpio_is_valid(panel->reset_config.reset_gpio))
+			gpio_set_value(panel->reset_config.reset_gpio, 0);
 
-	if (gpio_is_valid(panel->reset_config.reset_gpio) &&
-					!panel->reset_gpio_always_on)
-		gpio_set_value(panel->reset_config.reset_gpio, 0);
+		if (gpio_is_valid(panel->reset_config.tp_rst_gpio))
+			gpio_set_value(panel->reset_config.tp_rst_gpio, 0);
 
-	if (gpio_is_valid(panel->reset_config.lcd_mode_sel_gpio))
-		gpio_set_value(panel->reset_config.lcd_mode_sel_gpio, 0);
+		if (gpio_is_valid(panel->reset_config.pw8418_rst_gpio))
+			gpio_set_value(panel->reset_config.pw8418_rst_gpio, 0);
+		usleep_range(10000, 10000);
+		if (!IS_ERR(panel->bb_clk2)) {
+			clk_disable_unprepare(panel->bb_clk2);
+			DSI_INFO("[%s] disable bb_clk2", panel->name);
+		}
 
-	if (gpio_is_valid(panel->panel_test_gpio)) {
-		rc = gpio_direction_input(panel->panel_test_gpio);
+		if (gpio_is_valid(panel->reset_config.lcd_mode_sel_gpio))
+			gpio_set_value(panel->reset_config.lcd_mode_sel_gpio, 0);
+
+		if (gpio_is_valid(panel->panel_test_gpio)) {
+			rc = gpio_direction_input(panel->panel_test_gpio);
+			if (rc)
+				DSI_WARN("set dir for panel test gpio failed rc=%d\n",
+					 rc);
+		}
+
+		rc = dsi_panel_set_pinctrl_state(panel, false);
+		if (rc) {
+			DSI_ERR("[%s] failed set pinctrl state, rc=%d\n", panel->name,
+			       rc);
+		}
+
+		rc = dsi_pwr_enable_regulator(&panel->power_info, false);
 		if (rc)
-			DSI_WARN("set dir for panel test gpio failed rc=%d\n",
-				 rc);
+			DSI_ERR("[%s] failed to enable vregs, rc=%d\n",
+					panel->name, rc);
+#ifdef CONFIG_TOUCH_ILI7881X_TDDI
 	}
-
-	rc = dsi_panel_set_pinctrl_state(panel, false);
-	if (rc) {
-		DSI_ERR("[%s] failed set pinctrl state, rc=%d\n", panel->name,
-		       rc);
+	else
+	{
+		if (!IS_ERR(panel->bb_clk2)) {
+			clk_disable_unprepare(panel->bb_clk2);
+			DSI_INFO("[%s] disable bb_clk2", panel->name);
+		}
+		rc = regulator_disable(panel->power_info.vregs[vreg_name_vdd].vreg);
+		if (rc){
+			DSI_ERR("[%s] failed to disable vregs, rc=%d\n",
+					panel->name, rc);
+		}
 	}
-
-	rc = dsi_pwr_enable_regulator(&panel->power_info, false);
-	if (rc)
-		DSI_ERR("[%s] failed to enable vregs, rc=%d\n",
-				panel->name, rc);
-
+#endif
 	return rc;
+
 }
 static int dsi_panel_tx_cmd_set(struct dsi_panel *panel,
 				enum dsi_cmd_set_type type)
@@ -650,10 +796,15 @@ static int dsi_panel_update_backlight(struct dsi_panel *panel,
 
 	dsi = &panel->mipi_device;
 
+#if defined(CONFIG_PXLW_IRIS3) && !defined(IRIS3_ABYP_LIGHTUP)
+	rc = iris3_update_backlight(bl_lvl);
+#else
+
 	if (panel->bl_config.bl_inverted_dbv)
 		bl_lvl = (((bl_lvl & 0xff) << 8) | (bl_lvl >> 8));
 
 	rc = mipi_dsi_dcs_set_display_brightness(dsi, bl_lvl);
+#endif
 	if (rc < 0)
 		DSI_ERR("failed to update dcs backlight:%d\n", bl_lvl);
 
@@ -720,6 +871,8 @@ int dsi_panel_set_backlight(struct dsi_panel *panel, u32 bl_lvl)
 		return 0;
 
 	DSI_DEBUG("backlight type:%d lvl:%d\n", bl->type, bl_lvl);
+        pr_err("backlight type:%d lvl:%d\n", bl->type, bl_lvl);
+
 	switch (bl->type) {
 	case DSI_BACKLIGHT_WLED:
 		rc = backlight_device_set_brightness(bl->raw_bd, bl_lvl);
@@ -1733,6 +1886,9 @@ const char *cmd_set_prop_map[DSI_CMD_SET_MAX] = {
 	"qcom,mdss-dsi-post-mode-switch-on-command",
 	"qcom,mdss-dsi-qsync-on-commands",
 	"qcom,mdss-dsi-qsync-off-commands",
+#if defined(CONFIG_PXLW_IRIS3)
+	"iris,abyp-panel-command",
+#endif
 };
 
 const char *cmd_set_state_map[DSI_CMD_SET_MAX] = {
@@ -1759,6 +1915,9 @@ const char *cmd_set_state_map[DSI_CMD_SET_MAX] = {
 	"qcom,mdss-dsi-post-mode-switch-on-command-state",
 	"qcom,mdss-dsi-qsync-on-commands-state",
 	"qcom,mdss-dsi-qsync-off-commands-state",
+#if defined(CONFIG_PXLW_IRIS3)
+	"iris,abyp-panel-command-state",
+#endif
 };
 
 static int dsi_panel_get_cmd_pkt_count(const char *data, u32 length, u32 *cnt)
@@ -2170,6 +2329,38 @@ static int dsi_panel_parse_gpios(struct dsi_panel *panel)
 				 panel->name, rc);
 		}
 	}
+
+	panel->reset_config.pw8418_rst_gpio = utils->get_named_gpio(utils->data,
+						"qcom,platform-pw8418-rst-gpio",
+						0);
+	if (!gpio_is_valid(panel->reset_config.pw8418_rst_gpio)) {
+		DSI_DEBUG("[%s] qcom,platform-pw8418-rst-gpio is not set, rc=%d\n",
+			 panel->name, rc);
+		panel->reset_config.pw8418_rst_gpio =
+				utils->get_named_gpio(utils->data,
+					"qcom,platform-pw8418-rst-gpio", 0);
+		if (!gpio_is_valid(panel->reset_config.pw8418_rst_gpio)) {
+			DSI_DEBUG("[%s] qcom,platform-pw8418-rst-gpio is not set, rc=%d\n",
+				 panel->name, rc);
+		}
+	}
+	DSI_INFO("[%s] get pw8418-rst-gpio:%d \n", panel->name, panel->reset_config.pw8418_rst_gpio);
+
+	panel->reset_config.tp_rst_gpio = utils->get_named_gpio(utils->data,
+						"qcom,platform-tp-reset-gpio",
+						0);
+	if (!gpio_is_valid(panel->reset_config.tp_rst_gpio)) {
+		DSI_DEBUG("[%s] qcom,platform-tp-reset-gpio is not set, rc=%d\n",
+			 panel->name, rc);
+		panel->reset_config.tp_rst_gpio =
+				utils->get_named_gpio(utils->data,
+					"qcom,platform-tp-reset-gpio", 0);
+		if (!gpio_is_valid(panel->reset_config.tp_rst_gpio)) {
+			DSI_DEBUG("[%s] qcom,platform-tp-reset-gpio is not set, rc=%d\n",
+				 panel->name, rc);
+		}
+	}
+	DSI_INFO("[%s] get tp-rst-gpio:%d \n", panel->name, panel->reset_config.tp_rst_gpio);
 
 	panel->reset_config.lcd_mode_sel_gpio = utils->get_named_gpio(
 		utils->data, mode_set_gpio_name, 0);
@@ -3194,6 +3385,8 @@ static int dsi_panel_parse_esd_config(struct dsi_panel *panel)
 			esd_config->status_mode = ESD_MODE_SW_BTA;
 		} else if (!strcmp(string, "reg_read")) {
 			esd_config->status_mode = ESD_MODE_REG_READ;
+		} else if (!strcmp(string, "te_check")) {
+			esd_config->status_mode = ESD_MODE_PANEL_TE;
 		} else if (!strcmp(string, "te_signal_check")) {
 			if (panel->panel_mode == DSI_OP_CMD_MODE) {
 				esd_config->status_mode = ESD_MODE_PANEL_TE;
@@ -3377,6 +3570,15 @@ struct dsi_panel *dsi_panel_get(struct device *parent,
 	if (rc)
 		goto error;
 
+	panel->bb_clk2 = devm_clk_get(parent, "bb_clk2");
+	if (IS_ERR(panel->bb_clk2)) {
+		DSI_ERR("failed to get 8418 bb_clk2, rc=%d\n", IS_ERR(panel->bb_clk2));
+	} else {
+		rc = clk_prepare_enable(panel->bb_clk2);
+		if (rc)
+			DSI_ERR("failed to open 8418 bb_clk2 \n");
+	}
+
 	mutex_init(&panel->panel_lock);
 
 	return panel;
@@ -3393,6 +3595,70 @@ void dsi_panel_put(struct dsi_panel *panel)
 	dsi_panel_esd_config_deinit(&panel->esd_config);
 
 	kfree(panel);
+}
+
+static ssize_t panel_proc_calibrate_state_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
+{
+	int cnt=0;
+	char buff[12] = {0};
+	cnt=sprintf(buff,"%d\n",calibrate_state);
+	cnt += sprintf(buff + cnt, "\n");
+	if(copy_to_user(buf, buff,sizeof(buff)))
+		pr_err("%s %d copy_to_user \n",__func__,__LINE__);
+	//printk("%s,%d,calibrate_state =%d\n",__func__,__LINE__,calibrate_state);
+	return cnt;
+
+}
+
+static ssize_t panel_proc_calibrate_state_write(struct file *file, const char *buff,size_t len, loff_t *pos)
+{
+	char buf[12] = {0};
+	if(len > 12)
+		len =12;
+	if(copy_from_user(buf, buff, len))
+		pr_err("%s %d copy_from_user \n",__func__,__LINE__);
+	if(buf[0]=='0'||buf[0]==0)
+		calibrate_state = 0;
+        else if(buf[0]=='1'||buf[0]==1)
+		calibrate_state = 1;
+        else if(buf[0]=='2'||buf[0]==2)
+		calibrate_state = 2;
+        else
+                calibrate_state = 4;
+
+	//printk("%s,%d,calibrate_state=%d\n",__func__,__LINE__,calibrate_state);
+	return len;
+}
+
+static const struct file_operations panel_proc_calibrate_state_fops = {
+	.read		= panel_proc_calibrate_state_read,
+	.write		= panel_proc_calibrate_state_write,	
+};
+
+
+static int panel_calibrate_state_creat_proc_entry(void)
+{
+        struct proc_dir_entry *proc_entry_panel;
+
+        proc_entry_panel = proc_create_data("calibrate_state", 0666, NULL, &panel_proc_calibrate_state_fops, NULL);
+	if (IS_ERR_OR_NULL(proc_entry_panel))
+	{
+		pr_err("add /proc/calibrate_state error \n");
+	}
+
+    return 0;
+}
+
+int panel_calibrate_state_get(void)
+{
+	return calibrate_state;
+}
+
+int panel_calibrate_state_set(int state)
+{
+    calibrate_state = state;
+    printk("%s calibrate_state = %d\n",__func__,calibrate_state);
+    return 0;
 }
 
 int dsi_panel_drv_init(struct dsi_panel *panel,
@@ -3448,7 +3714,8 @@ int dsi_panel_drv_init(struct dsi_panel *panel,
 			       panel->name, rc);
 		goto error_gpio_release;
 	}
-
+	panel_calibrate_state_creat_proc_entry();
+	//hq_register_hw_info(HWID_LCM, "ili7807q_fhd_video_txd_20200327");
 	goto exit;
 
 error_gpio_release:
@@ -3940,8 +4207,18 @@ int dsi_panel_update_pps(struct dsi_panel *panel)
 		DSI_ERR("failed to create cmd packets, rc=%d\n", rc);
 		goto error;
 	}
+#if defined(CONFIG_PXLW_IRIS3)
+	pr_info("qcom pps table:\n");
+	print_hex_dump(KERN_INFO, "", DUMP_PREFIX_NONE, 16, 4,
+			set->cmds->msg.tx_buf, set->cmds->msg.tx_len, false);
 
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_PPS]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PPS);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PPS);
+#endif
 	if (rc) {
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_PPS cmds, rc=%d\n",
 			panel->name, rc);
@@ -3977,7 +4254,15 @@ int dsi_panel_set_lp1(struct dsi_panel *panel)
 		panel->power_mode != SDE_MODE_DPMS_LP2)
 		dsi_pwr_panel_regulator_mode_set(&panel->power_info,
 			"ibb", REGULATOR_MODE_IDLE);
+
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_LP1]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_LP1);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_LP1);
+#endif
 	if (rc)
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_LP1 cmd, rc=%d\n",
 		       panel->name, rc);
@@ -3998,8 +4283,14 @@ int dsi_panel_set_lp2(struct dsi_panel *panel)
 	mutex_lock(&panel->panel_lock);
 	if (!panel->panel_initialized)
 		goto exit;
-
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_LP2]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_LP2);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_LP2);
+#endif
 	if (rc)
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_LP2 cmd, rc=%d\n",
 		       panel->name, rc);
@@ -4029,7 +4320,15 @@ int dsi_panel_set_nolp(struct dsi_panel *panel)
 	     panel->power_mode == SDE_MODE_DPMS_LP2))
 		dsi_pwr_panel_regulator_mode_set(&panel->power_info,
 			"ibb", REGULATOR_MODE_NORMAL);
+
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+                rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_NOLP]));
+        else
+                rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_NOLP);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_NOLP);
+#endif
 	if (rc)
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_NOLP cmd, rc=%d\n",
 		       panel->name, rc);
@@ -4057,8 +4356,14 @@ int dsi_panel_prepare(struct dsi_panel *panel)
 			goto error;
 		}
 	}
-
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_PRE_ON]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PRE_ON);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PRE_ON);
+#endif
 	if (rc) {
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_PRE_ON cmds, rc=%d\n",
 		       panel->name, rc);
@@ -4160,7 +4465,14 @@ int dsi_panel_send_qsync_on_dcs(struct dsi_panel *panel,
 	mutex_lock(&panel->panel_lock);
 
 	DSI_DEBUG("ctrl:%d qsync on\n", ctrl_idx);
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_QSYNC_ON]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_QSYNC_ON);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_QSYNC_ON);
+#endif
 	if (rc)
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_QSYNC_ON cmds rc=%d\n",
 		       panel->name, rc);
@@ -4182,7 +4494,14 @@ int dsi_panel_send_qsync_off_dcs(struct dsi_panel *panel,
 	mutex_lock(&panel->panel_lock);
 
 	DSI_DEBUG("ctrl:%d qsync off\n", ctrl_idx);
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_QSYNC_OFF]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_QSYNC_OFF);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_QSYNC_OFF);
+#endif
 	if (rc)
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_QSYNC_OFF cmds rc=%d\n",
 		       panel->name, rc);
@@ -4217,8 +4536,14 @@ int dsi_panel_send_roi_dcs(struct dsi_panel *panel, int ctrl_idx,
 	SDE_EVT32(roi->x, roi->y, roi->w, roi->h);
 
 	mutex_lock(&panel->panel_lock);
-
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+                rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_ROI]));
+        else
+                rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_ROI);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_ROI);
+#endif
 	if (rc)
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_ROI cmds, rc=%d\n",
 				panel->name, rc);
@@ -4321,8 +4646,15 @@ int dsi_panel_switch(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
-
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_TIMING_SWITCH]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_TIMING_SWITCH);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_TIMING_SWITCH);
+#endif
+
 	if (rc)
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_TIMING_SWITCH cmds, rc=%d\n",
 		       panel->name, rc);
@@ -4341,8 +4673,14 @@ int dsi_panel_post_switch(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
-
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_POST_TIMING_SWITCH]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_TIMING_SWITCH);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_TIMING_SWITCH);
+#endif
 	if (rc)
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_POST_TIMING_SWITCH cmds, rc=%d\n",
 		       panel->name, rc);
@@ -4361,8 +4699,13 @@ int dsi_panel_enable(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
-
+#if defined(CONFIG_PXLW_IRIS3)
+	rc = iris_panel_enable(panel,
+		&(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_ON]));
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_ON);
+#endif
+
 	if (rc)
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_ON cmds, rc=%d\n",
 		       panel->name, rc);
@@ -4382,8 +4725,14 @@ int dsi_panel_post_enable(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
-
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_POST_ON]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_ON);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_ON);
+#endif
 	if (rc) {
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_POST_ON cmds, rc=%d\n",
 		       panel->name, rc);
@@ -4404,13 +4753,24 @@ int dsi_panel_pre_disable(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_lightoff(panel, DSI_CMD_SET_PRE_OFF);
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PRE_OFF);
+#else
 
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PRE_OFF);
+#endif
 	if (rc) {
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_PRE_OFF cmds, rc=%d\n",
 		       panel->name, rc);
 		goto error;
 	}
+#if defined(CONFIG_PXLW_IRIS3)
+	if (!atomic_read(&panel->esd_recovery_pending))
+		iris3_lightoff_pre();
+#endif
 
 error:
 	mutex_unlock(&panel->panel_lock);
@@ -4439,7 +4799,15 @@ int dsi_panel_disable(struct dsi_panel *panel)
 			panel->power_mode == SDE_MODE_DPMS_LP2))
 			dsi_pwr_panel_regulator_mode_set(&panel->power_info,
 				"ibb", REGULATOR_MODE_STANDBY);
+
+#if defined(CONFIG_PXLW_IRIS3)
+		if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+			rc = iris3_lightoff(panel, DSI_CMD_SET_OFF);
+		else
+			rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_OFF);
+#else
 		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_OFF);
+#endif
 		if (rc) {
 			/*
 			 * Sending panel off commands may fail when  DSI
@@ -4469,8 +4837,15 @@ int dsi_panel_unprepare(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_POST_OFF]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_OFF);
+#else
 
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_OFF);
+#endif
 	if (rc) {
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_POST_OFF cmds, rc=%d\n",
 		       panel->name, rc);

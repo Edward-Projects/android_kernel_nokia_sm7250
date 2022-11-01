@@ -904,8 +904,11 @@ void sde_connector_helper_bridge_enable(struct drm_connector *connector)
 	 */
 	if (display->panel->bl_config.bl_update ==
 				BL_UPDATE_DELAY_UNTIL_FIRST_FRAME)
+	{
 		sde_encoder_wait_for_event(c_conn->encoder,
 				MSM_ENC_TX_COMPLETE);
+		mdelay(40);
+	}
 	c_conn->allow_bl_update = true;
 
 	if (c_conn->bl_device) {

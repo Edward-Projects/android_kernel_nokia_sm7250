@@ -355,5 +355,20 @@ void sde_encoder_needs_hw_reset(struct drm_encoder *enc);
  * @enable:	enable/disable flag
  */
 void sde_encoder_uidle_enable(struct drm_encoder *drm_enc, bool enable);
+#if defined(CONFIG_PXLW_IRIS3)
+/**
+ * sde_encoder_rc_lock - lock the sde encoder resource control.
+ * @drm_enc:    Pointer to drm encoder structure
+ * @Return:     void.
+ */
+void sde_encoder_rc_lock(struct drm_encoder *drm_enc);
+
+/**
+ * sde_encoder_rc_unlock - unlock the sde encoder resource control.
+ * @drm_enc:    Pointer to drm encoder structure
+ * @Return:     void.
+ */
+void sde_encoder_rc_unlock(struct drm_encoder *drm_enc);
+#endif
 
 #endif /* __SDE_ENCODER_H__ */
