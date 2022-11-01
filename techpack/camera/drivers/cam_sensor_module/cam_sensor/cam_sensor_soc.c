@@ -202,6 +202,16 @@ static int32_t cam_sensor_driver_get_dt_data(struct cam_sensor_ctrl_t *s_ctrl)
 		CAM_DBG(CAM_SENSOR, "Invalid sensor position");
 		sensordata->pos_yaw = 360;
 	}
+	
+	//wyc add for hardware info
+	if (of_property_read_u32(of_node,"hq-cam-position",
+	    &sensordata->hq_cam_pos) < 0){
+	   CAM_ERR(CAM_SENSOR,"Invalid hq sensor position");
+	   sensordata->hq_cam_pos= 66;
+	}
+	//wyc add for hardware info
+
+
 
 	return rc;
 
