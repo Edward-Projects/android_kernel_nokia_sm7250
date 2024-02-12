@@ -56,6 +56,9 @@
 
 #define CREATE_TRACE_POINTS
 #include "sde_trace.h"
+#if defined(CONFIG_PXLW_IRIS3)
+#include "dsi_iris3_api.h"
+#endif
 
 /* defines for secure channel call */
 #define MEM_PROTECT_SD_CTRL_SWITCH 0x18
@@ -3051,6 +3054,25 @@ end:
 	return 0;
 }
 
+#if defined(CONFIG_PXLW_IRIS3)
+static int sde_kms_iris3_operate(struct msm_kms *kms,
+		u32 operate_type, struct msm_iris_operate_value *operate_value)
+{
+	int ret = -EINVAL;
+	struct sde_kms *sde_kms = NULL;
+
+	sde_kms = to_sde_kms(kms);
+
+	if (operate_type == DRM_MSM_IRIS_OPERATE_CONF) {
+		ret = iris3_operate_conf(operate_value);
+	} else if (operate_type == DRM_MSM_IRIS_OPERATE_TOOL) {
+		ret = iris3_operate_tool(operate_value);
+	}
+
+	return ret;
+}
+#endif // CONFIG_PXLW_IRIS3
+
 static const struct msm_kms_funcs kms_funcs = {
 	.hw_init         = sde_kms_hw_init,
 	.postinit        = sde_kms_postinit,
@@ -3082,6 +3104,9 @@ static const struct msm_kms_funcs kms_funcs = {
 	.postopen = _sde_kms_post_open,
 	.check_for_splash = sde_kms_check_for_splash,
 	.get_mixer_count = sde_kms_get_mixer_count,
+#if defined(CONFIG_PXLW_IRIS3)
+	.iris3_operate = sde_kms_iris3_operate,
+#endif
 };
 
 /* the caller api needs to turn on clock before calling it */
