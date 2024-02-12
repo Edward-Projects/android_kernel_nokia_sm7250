@@ -80,3 +80,4 @@ obj-y                           += qrc/
 obj-$(CONFIG_KINECTICS_XR_NORDIC) += kxrctrl/
 obj-$(CONFIG_AW8624_HAPTIC) 	+= aw8624_haptic/
 obj-$(CONFIG_DRV2624_HAPTIC) 	+= drv2624_haptic/
+obj-$(CONFIG_ANTCABLE_DETECT)   += ant_ctrl_detect.o

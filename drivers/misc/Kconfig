@@ -691,3 +691,9 @@ config DRV2624_HAPTIC
 	  To compile this driver as a module, choose M here: the
 	  module will be called drv2624_haptic.
 
+config ANTCABLE_DETECT
+	bool "ANT cable detect driver"
+	help
+	  Say Y here if you support the ANT cable insert state in your system.
+
+	  If unsure, say N.
