@@ -283,6 +283,8 @@ static void free_fw_priv(struct fw_priv *fw_priv)
 static char fw_path_para[256];
 static const char * const fw_path[] = {
 	fw_path_para,
+	"/vendor/firmware",
+	"/system/etc/firmware",
 	"/lib/firmware/updates/" UTS_RELEASE,
 	"/lib/firmware/updates",
 	"/lib/firmware/" UTS_RELEASE,
@@ -329,6 +331,35 @@ fw_get_filesystem_firmware(struct device *device, struct fw_priv *fw_priv)
 			break;
 		}
 
+		/* CONFIG_PXLW_IRIS3 */
+		if (!strcmp(fw_priv->fw_name, "iris3.fw") && i == 1) {
+				snprintf(path, PATH_MAX, "%s/%s", "/mnt/pixelworks", "iris3.fw");
+				dev_err(device, "[Iris] Try to load 1: %s\n", path);
+		}
+		if (!strcmp(fw_priv->fw_name, "2nd-iris3.fw") && i == 1) {
+				snprintf(path, PATH_MAX, "%s/%s", "/mnt/pixelworks", "iris3.fw");
+				dev_err(device, "[Iris] Try to load 1: %s\n", path);
+		}
+		if (!strcmp(fw_priv->fw_name, "iris3_default.fw") && i == 1) {
+				snprintf(path, PATH_MAX, "%s/%s", "/vendor/firmware", "iris3.fw");
+				dev_err(device, "[Iris] Try to load 1: %s\n", path);
+		}
+
+		if (!strcmp(fw_priv->fw_name, "2nd_iris3_default.fw") && i == 1) {
+				snprintf(path, PATH_MAX, "%s/%s", "/vendor/firmware", "2nd-iris3.fw");
+				dev_err(device, "[Iris] Try to load 1: %s\n", path);
+		}
+
+		if (!strcmp(fw_priv->fw_name, "iris3.fw") && i == 2) {
+				snprintf(path, PATH_MAX, "%s/%s", "/vendor/firmware", "iris3.fw");
+				dev_err(device, "[Iris] Try to load 2: %s\n", path);
+		}
+		if (!strcmp(fw_priv->fw_name, "2nd-iris3.fw") && i == 2) {
+				snprintf(path, PATH_MAX, "%s/%s", "/vendor/firmware", "2nd-iris3.fw");
+				dev_err(device, "[Iris] Try to load 2: %s\n", path);
+		}
+
+		/* end of iris3 */
 		fw_priv->size = 0;
 		rc = kernel_read_file_from_path(path, &fw_priv->data, &size,
 						msize, id);

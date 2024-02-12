@@ -16,6 +16,11 @@
 #include "dsi_parser.h"
 #include "sde_dbg.h"
 
+#if defined(CONFIG_PXLW_IRIS3)
+#include "dsi_iris3_api.h"
+#include "dsi_iris3_lp.h"
+#endif
+
 /**
  * topology is currently defined by a set of following 3 values:
  * 1. num of layer mixers
@@ -465,14 +470,16 @@ static int dsi_panel_power_on(struct dsi_panel *panel)
 		goto error_disable_vregs;
 	}
 
+#if !defined(CONFIG_PXLW_IRIS3)
 	rc = dsi_panel_reset(panel);
 	if (rc) {
 		DSI_ERR("[%s] failed to reset panel, rc=%d\n", panel->name, rc);
 		goto error_disable_gpio;
 	}
-
+#endif
 	goto exit;
 
+#if !defined(CONFIG_PXLW_IRIS3)
 error_disable_gpio:
 	if (gpio_is_valid(panel->reset_config.disp_en_gpio))
 		gpio_set_value(panel->reset_config.disp_en_gpio, 0);
@@ -481,14 +488,26 @@ error_disable_gpio:
 		gpio_set_value(panel->bl_config.en_gpio, 0);
 
 	(void)dsi_panel_set_pinctrl_state(panel, false);
-
+#endif
 error_disable_vregs:
 	(void)dsi_pwr_enable_regulator(&panel->power_info, false);
 
 exit:
 	return rc;
 }
-
+#if defined(CONFIG_PXLW_IRIS3)
+int dsi_panel_reset_delay(struct dsi_panel *panel)
+{
+	int rc = 0;
+	rc = dsi_panel_reset(panel);
+	if (rc) {
+		DSI_ERR("[%s] failed to reset panel, rc=%d\n", panel->name, rc);
+		goto error_disable_gpio;
+	}
+#endif
+exit:
+	return rc;
+}
 static int dsi_panel_power_off(struct dsi_panel *panel)
 {
 	int rc = 0;
@@ -669,6 +688,10 @@ static int dsi_panel_update_backlight(struct dsi_panel *panel,
 	dsi = &panel->mipi_device;
 	bl = &panel->bl_config;
 
+#if defined(CONFIG_PXLW_IRIS3) && !defined(IRIS3_ABYP_LIGHTUP)
+	rc = iris3_update_backlight(bl_lvl);
+#else
+
 	if (panel->bl_config.bl_inverted_dbv)
 		bl_lvl = (((bl_lvl & 0xff) << 8) | (bl_lvl >> 8));
 
@@ -676,7 +699,7 @@ static int dsi_panel_update_backlight(struct dsi_panel *panel,
 		rc = dsi_panel_dcs_set_display_brightness_c2(dsi, bl_lvl);
 	else
 		rc = mipi_dsi_dcs_set_display_brightness(dsi, bl_lvl);
-
+#endif
 	if (rc < 0)
 		DSI_ERR("failed to update dcs backlight:%d\n", bl_lvl);
 
@@ -1830,6 +1853,9 @@ const char *cmd_set_prop_map[DSI_CMD_SET_MAX] = {
 	"qcom,mdss-dsi-post-mode-switch-on-command",
 	"qcom,mdss-dsi-qsync-on-commands",
 	"qcom,mdss-dsi-qsync-off-commands",
+#if defined(CONFIG_PXLW_IRIS3)
+	"iris,abyp-panel-command",
+#endif
 };
 
 const char *cmd_set_state_map[DSI_CMD_SET_MAX] = {
@@ -1856,6 +1882,9 @@ const char *cmd_set_state_map[DSI_CMD_SET_MAX] = {
 	"qcom,mdss-dsi-post-mode-switch-on-command-state",
 	"qcom,mdss-dsi-qsync-on-commands-state",
 	"qcom,mdss-dsi-qsync-off-commands-state",
+#if defined(CONFIG_PXLW_IRIS3)
+	"iris,abyp-panel-command-state",
+#endif
 };
 
 static int dsi_panel_get_cmd_pkt_count(const char *data, u32 length, u32 *cnt)
@@ -4042,8 +4071,18 @@ int dsi_panel_update_pps(struct dsi_panel *panel)
 		DSI_ERR("failed to create cmd packets, rc=%d\n", rc);
 		goto error;
 	}
+#if defined(CONFIG_PXLW_IRIS3)
+	pr_info("qcom pps table:\n");
+	print_hex_dump(KERN_INFO, "", DUMP_PREFIX_NONE, 16, 4,
+			set->cmds->msg.tx_buf, set->cmds->msg.tx_len, false);
 
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_PPS]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PPS);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PPS);
+#endif
 	if (rc) {
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_PPS cmds, rc=%d\n",
 			panel->name, rc);
@@ -4079,7 +4118,15 @@ int dsi_panel_set_lp1(struct dsi_panel *panel)
 		panel->power_mode != SDE_MODE_DPMS_LP2)
 		dsi_pwr_panel_regulator_mode_set(&panel->power_info,
 			"ibb", REGULATOR_MODE_IDLE);
+
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_LP1]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_LP1);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_LP1);
+#endif
 	if (rc)
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_LP1 cmd, rc=%d\n",
 		       panel->name, rc);
@@ -4100,8 +4147,14 @@ int dsi_panel_set_lp2(struct dsi_panel *panel)
 	mutex_lock(&panel->panel_lock);
 	if (!panel->panel_initialized)
 		goto exit;
-
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_LP2]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_LP2);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_LP2);
+#endif
 	if (rc)
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_LP2 cmd, rc=%d\n",
 		       panel->name, rc);
@@ -4131,7 +4184,15 @@ int dsi_panel_set_nolp(struct dsi_panel *panel)
 	     panel->power_mode == SDE_MODE_DPMS_LP2))
 		dsi_pwr_panel_regulator_mode_set(&panel->power_info,
 			"ibb", REGULATOR_MODE_NORMAL);
+
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+                rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_NOLP]));
+        else
+                rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_NOLP);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_NOLP);
+#endif
 	if (rc)
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_NOLP cmd, rc=%d\n",
 		       panel->name, rc);
@@ -4159,8 +4220,14 @@ int dsi_panel_prepare(struct dsi_panel *panel)
 			goto error;
 		}
 	}
-
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_PRE_ON]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PRE_ON);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PRE_ON);
+#endif
 	if (rc) {
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_PRE_ON cmds, rc=%d\n",
 		       panel->name, rc);
@@ -4262,7 +4329,14 @@ int dsi_panel_send_qsync_on_dcs(struct dsi_panel *panel,
 	mutex_lock(&panel->panel_lock);
 
 	DSI_DEBUG("ctrl:%d qsync on\n", ctrl_idx);
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_QSYNC_ON]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_QSYNC_ON);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_QSYNC_ON);
+#endif
 	if (rc)
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_QSYNC_ON cmds rc=%d\n",
 		       panel->name, rc);
@@ -4284,7 +4358,14 @@ int dsi_panel_send_qsync_off_dcs(struct dsi_panel *panel,
 	mutex_lock(&panel->panel_lock);
 
 	DSI_DEBUG("ctrl:%d qsync off\n", ctrl_idx);
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_QSYNC_OFF]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_QSYNC_OFF);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_QSYNC_OFF);
+#endif
 	if (rc)
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_QSYNC_OFF cmds rc=%d\n",
 		       panel->name, rc);
@@ -4319,8 +4400,14 @@ int dsi_panel_send_roi_dcs(struct dsi_panel *panel, int ctrl_idx,
 	SDE_EVT32(roi->x, roi->y, roi->w, roi->h);
 
 	mutex_lock(&panel->panel_lock);
-
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+                rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_ROI]));
+        else
+                rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_ROI);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_ROI);
+#endif
 	if (rc)
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_ROI cmds, rc=%d\n",
 				panel->name, rc);
@@ -4423,8 +4510,15 @@ int dsi_panel_switch(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
-
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_TIMING_SWITCH]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_TIMING_SWITCH);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_TIMING_SWITCH);
+#endif
+
 	if (rc)
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_TIMING_SWITCH cmds, rc=%d\n",
 		       panel->name, rc);
@@ -4443,8 +4537,14 @@ int dsi_panel_post_switch(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
-
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_POST_TIMING_SWITCH]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_TIMING_SWITCH);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_TIMING_SWITCH);
+#endif
 	if (rc)
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_POST_TIMING_SWITCH cmds, rc=%d\n",
 		       panel->name, rc);
@@ -4463,8 +4563,13 @@ int dsi_panel_enable(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
-
+#if defined(CONFIG_PXLW_IRIS3)
+	rc = iris_panel_enable(panel,
+		&(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_ON]));
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_ON);
+#endif
+
 	if (rc)
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_ON cmds, rc=%d\n",
 		       panel->name, rc);
@@ -4484,8 +4589,14 @@ int dsi_panel_post_enable(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
-
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_POST_ON]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_ON);
+#else
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_ON);
+#endif
 	if (rc) {
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_POST_ON cmds, rc=%d\n",
 		       panel->name, rc);
@@ -4506,13 +4617,24 @@ int dsi_panel_pre_disable(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_lightoff(panel, DSI_CMD_SET_PRE_OFF);
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PRE_OFF);
+#else
 
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_PRE_OFF);
+#endif
 	if (rc) {
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_PRE_OFF cmds, rc=%d\n",
 		       panel->name, rc);
 		goto error;
 	}
+#if defined(CONFIG_PXLW_IRIS3)
+	if (!atomic_read(&panel->esd_recovery_pending))
+		iris3_lightoff_pre();
+#endif
 
 error:
 	mutex_unlock(&panel->panel_lock);
@@ -4541,7 +4663,15 @@ int dsi_panel_disable(struct dsi_panel *panel)
 			panel->power_mode == SDE_MODE_DPMS_LP2))
 			dsi_pwr_panel_regulator_mode_set(&panel->power_info,
 				"ibb", REGULATOR_MODE_STANDBY);
+
+#if defined(CONFIG_PXLW_IRIS3)
+		if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+			rc = iris3_lightoff(panel, DSI_CMD_SET_OFF);
+		else
+			rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_OFF);
+#else
 		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_OFF);
+#endif
 		if (rc) {
 			/*
 			 * Sending panel off commands may fail when  DSI
@@ -4571,8 +4701,15 @@ int dsi_panel_unprepare(struct dsi_panel *panel)
 	}
 
 	mutex_lock(&panel->panel_lock);
+#if defined(CONFIG_PXLW_IRIS3)
+	if (iris3_abypass_mode_get() == PASS_THROUGH_MODE)
+		rc = iris3_panel_cmd_passthrough(panel, &(panel->cur_mode->priv_info->cmd_sets[DSI_CMD_SET_POST_OFF]));
+	else
+		rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_OFF);
+#else
 
 	rc = dsi_panel_tx_cmd_set(panel, DSI_CMD_SET_POST_OFF);
+#endif
 	if (rc) {
 		DSI_ERR("[%s] failed to send DSI_CMD_SET_POST_OFF cmds, rc=%d\n",
 		       panel->name, rc);
