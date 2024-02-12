@@ -416,7 +416,8 @@ static irqreturn_t dsi_display_panel_te_irq_handler(int irq, void *data)
 		return IRQ_HANDLED;
 
 	SDE_EVT32(SDE_EVTLOG_FUNC_CASE1);
-	complete_all(&display->esd_te_gate);
+	//complete_all(&display->esd_te_gate);
+	display->esd_te_get = 1;
 	return IRQ_HANDLED;
 }
 
@@ -469,7 +470,7 @@ static void dsi_display_register_te_irq(struct dsi_display *display)
 	irq_set_status_flags(te_irq, IRQ_DISABLE_UNLAZY);
 
 	rc = devm_request_irq(dev, te_irq, dsi_display_panel_te_irq_handler,
-			      IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
+			      IRQF_TRIGGER_RISING | IRQF_ONESHOT,
 			      "TE_GPIO", display);
 	if (rc) {
 		DSI_ERR("TE request_irq failed for ESD rc:%d\n", rc);
@@ -477,9 +478,9 @@ static void dsi_display_register_te_irq(struct dsi_display *display)
 		goto error;
 	}
 
-	disable_irq(te_irq);
-	display->is_te_irq_enabled = false;
-
+	enable_irq(te_irq);
+	display->is_te_irq_enabled = true;
+	display->esd_te_get = 0;
 	return;
 
 error:
@@ -791,18 +792,18 @@ static int dsi_display_status_bta_request(struct dsi_display *display)
 static int dsi_display_status_check_te(struct dsi_display *display)
 {
 	int rc = 1;
-	int const esd_te_timeout = msecs_to_jiffies(3*20);
+	//int const esd_te_timeout = msecs_to_jiffies(3*20);
 
-	dsi_display_change_te_irq_status(display, true);
+	//dsi_display_change_te_irq_status(display, true);
 
 	reinit_completion(&display->esd_te_gate);
-	if (!wait_for_completion_timeout(&display->esd_te_gate,
-				esd_te_timeout)) {
+	if ((1 == display->esd_te_get) || (1 == lcd_recovery_flag)) {
 		DSI_ERR("TE check failed\n");
+		DSI_ERR("display->esd_te_get = %d, lcd_recovery_flag = %d\n", display->esd_te_get, lcd_recovery_flag);
 		rc = -EINVAL;
 	}
 
-	dsi_display_change_te_irq_status(display, false);
+	//dsi_display_change_te_irq_status(display, false);
 
 	return rc;
 }
@@ -890,7 +891,8 @@ exit:
 release_panel_lock:
 	dsi_panel_release_panel_lock(panel);
 	SDE_EVT32(SDE_EVTLOG_FUNC_EXIT, rc);
-
+	dsi_display->esd_te_get = 0;
+	lcd_recovery_flag = 0;
 	return rc;
 }
 

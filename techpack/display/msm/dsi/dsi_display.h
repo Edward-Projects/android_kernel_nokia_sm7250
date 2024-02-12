@@ -204,6 +204,7 @@ struct dsi_display {
 	int disp_te_gpio;
 	bool is_te_irq_enabled;
 	struct completion esd_te_gate;
+	bool esd_te_get;
 
 	u32 ctrl_count;
 	struct dsi_display_ctrl ctrl[MAX_DSI_CTRLS_PER_DISPLAY];

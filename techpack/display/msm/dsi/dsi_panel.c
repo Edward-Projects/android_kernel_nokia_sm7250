@@ -10,11 +10,15 @@
 #include <linux/of_gpio.h>
 #include <linux/pwm.h>
 #include <video/mipi_display.h>
+#include <linux/string.h>
 
 #include "dsi_panel.h"
 #include "dsi_ctrl_hw.h"
 #include "dsi_parser.h"
 #include "sde_dbg.h"
+#include <linux/proc_fs.h>
+#include <asm/uaccess.h>
+#include <linux/hqsysfs.h>
 
 #ifdef CONFIG_TOUCH_ILI7881X_TDDI
 extern int tp_supend_need_power_reset_high(void);
@@ -26,6 +30,9 @@ extern void tp_gesture_force_recover(bool force);
 #include "dsi_iris3_api.h"
 #include "dsi_iris3_lp.h"
 #endif
+
+extern void tp_reset_for_lcd_use(void);
+extern int tp_supend_need_power_reset_high(void);
 
 /**
  * topology is currently defined by a set of following 3 values:
@@ -44,6 +51,10 @@ extern void tp_gesture_force_recover(bool force);
 #define MAX_PANEL_JITTER		10
 #define DEFAULT_PANEL_PREFILL_LINES	25
 #define MIN_PREFILL_LINES      35
+
+int vreg_name_vdd = 0;
+
+static int calibrate_state = 0;
 
 enum dsi_dsc_ratio_type {
 	DSC_8BPC_8BPP,
@@ -236,6 +247,9 @@ static int dsi_panel_vreg_get(struct dsi_panel *panel)
 			       panel->power_info.vregs[i].vreg_name);
 			goto error_put;
 		}
+		if(!strcmp(panel->power_info.vregs[i].vreg_name, "vdd")){
+			vreg_name_vdd = i;
+		}
 		panel->power_info.vregs[i].vreg = vreg;
 	}
 
@@ -306,7 +320,31 @@ static int dsi_panel_gpio_request(struct dsi_panel *panel)
 		}
 	}
 
+	if (gpio_is_valid(r_config->pw8418_rst_gpio)) {
+		rc = gpio_request(r_config->pw8418_rst_gpio, "pw8418_rst_gpio");
+		if (rc) {
+			DSI_WARN("request for pw8418_rst_gpio failed, rc=%d\n",
+				 rc);
+			goto error_release_pw8418_rst_gpio;
+		}
+	}
+
+	if (gpio_is_valid(r_config->tp_rst_gpio)) {
+		rc = gpio_request(r_config->tp_rst_gpio, "tp_rst_gpio");
+		if (rc) {
+			DSI_WARN("request for tp_rst_gpio failed, rc=%d\n",
+				 rc);
+			goto error_release_tp_rst_gpio;
+		}
+	}
+
 	goto error;
+error_release_tp_rst_gpio:
+	if (gpio_is_valid(r_config->tp_rst_gpio))
+		gpio_free(r_config->tp_rst_gpio);
+error_release_pw8418_rst_gpio:
+	if (gpio_is_valid(r_config->pw8418_rst_gpio))
+		gpio_free(r_config->pw8418_rst_gpio);
 error_release_mode_sel:
 	if (gpio_is_valid(panel->bl_config.en_gpio))
 		gpio_free(panel->bl_config.en_gpio);
@@ -330,6 +368,12 @@ static int dsi_panel_gpio_release(struct dsi_panel *panel)
 
 	if (gpio_is_valid(r_config->disp_en_gpio))
 		gpio_free(r_config->disp_en_gpio);
+
+	if (gpio_is_valid(r_config->tp_rst_gpio))
+		gpio_free(r_config->tp_rst_gpio);
+
+	if (gpio_is_valid(r_config->pw8418_rst_gpio))
+		gpio_free(r_config->pw8418_rst_gpio);
 
 	if (gpio_is_valid(panel->bl_config.en_gpio))
 		gpio_free(panel->bl_config.en_gpio);
@@ -489,6 +533,22 @@ static int dsi_panel_power_on(struct dsi_panel *panel)
 		goto error_disable_vregs;
 	}
 
+	if (!IS_ERR(panel->bb_clk2)) {
+		clk_prepare_enable(panel->bb_clk2);
+		DSI_INFO("[%s] enable bb_clk2\n", panel->name);
+	}
+	usleep_range(10000, 10000);
+	if (gpio_is_valid(panel->reset_config.pw8418_rst_gpio)) {
+		rc = gpio_direction_output(panel->reset_config.pw8418_rst_gpio, 0);
+		msleep(10);
+		rc = gpio_direction_output(panel->reset_config.pw8418_rst_gpio, 1);
+		msleep(10);
+		rc = gpio_direction_output(panel->reset_config.pw8418_rst_gpio, 1);
+		if (rc) {
+			DSI_ERR("[%s] failed to set pw8418 rst gpio, rc=%d\n", panel->name, rc);
+		}
+		msleep(10);
+	}
 #if !defined(CONFIG_PXLW_IRIS3)
 	rc = dsi_panel_reset(panel);
 	if (rc) {
@@ -529,6 +589,18 @@ int dsi_panel_reset_delay(struct dsi_panel *panel)
 #ifdef CONFIG_TOUCH_ILI7881X_TDDI
         ili_resume_by_ddi();
 #endif
+	goto exit;
+
+error_disable_gpio:
+	if (gpio_is_valid(panel->reset_config.disp_en_gpio))
+		gpio_set_value(panel->reset_config.disp_en_gpio, 0);
+
+	if (gpio_is_valid(panel->bl_config.en_gpio))
+		gpio_set_value(panel->bl_config.en_gpio, 0);
+
+	(void)dsi_panel_set_pinctrl_state(panel, false);
+	(void)dsi_pwr_enable_regulator(&panel->power_info, false);
+
 exit:
 	return rc;
 }
@@ -541,33 +613,44 @@ static int dsi_panel_power_off(struct dsi_panel *panel)
 		tp_gesture_force_recover(false);
 	if (!tp_supend_need_power_reset_high()) {
 #endif
-	if (gpio_is_valid(panel->reset_config.disp_en_gpio))
-		gpio_set_value(panel->reset_config.disp_en_gpio, 0);
+		if (gpio_is_valid(panel->reset_config.disp_en_gpio))
+			gpio_set_value(panel->reset_config.disp_en_gpio, 0);
 
-	if (gpio_is_valid(panel->reset_config.reset_gpio) &&
-					!panel->reset_gpio_always_on)
-		gpio_set_value(panel->reset_config.reset_gpio, 0);
+		msleep(180);
+		if (gpio_is_valid(panel->reset_config.reset_gpio))
+			gpio_set_value(panel->reset_config.reset_gpio, 0);
 
-	if (gpio_is_valid(panel->reset_config.lcd_mode_sel_gpio))
-		gpio_set_value(panel->reset_config.lcd_mode_sel_gpio, 0);
+		if (gpio_is_valid(panel->reset_config.tp_rst_gpio))
+			gpio_set_value(panel->reset_config.tp_rst_gpio, 0);
 
-	if (gpio_is_valid(panel->panel_test_gpio)) {
-		rc = gpio_direction_input(panel->panel_test_gpio);
+		if (gpio_is_valid(panel->reset_config.pw8418_rst_gpio))
+			gpio_set_value(panel->reset_config.pw8418_rst_gpio, 0);
+		usleep_range(10000, 10000);
+		if (!IS_ERR(panel->bb_clk2)) {
+			clk_disable_unprepare(panel->bb_clk2);
+			DSI_INFO("[%s] disable bb_clk2", panel->name);
+		}
+
+		if (gpio_is_valid(panel->reset_config.lcd_mode_sel_gpio))
+			gpio_set_value(panel->reset_config.lcd_mode_sel_gpio, 0);
+
+		if (gpio_is_valid(panel->panel_test_gpio)) {
+			rc = gpio_direction_input(panel->panel_test_gpio);
+			if (rc)
+				DSI_WARN("set dir for panel test gpio failed rc=%d\n",
+					 rc);
+		}
+
+		rc = dsi_panel_set_pinctrl_state(panel, false);
+		if (rc) {
+			DSI_ERR("[%s] failed set pinctrl state, rc=%d\n", panel->name,
+			       rc);
+		}
+
+		rc = dsi_pwr_enable_regulator(&panel->power_info, false);
 		if (rc)
-			DSI_WARN("set dir for panel test gpio failed rc=%d\n",
-				 rc);
-	}
-
-	rc = dsi_panel_set_pinctrl_state(panel, false);
-	if (rc) {
-		DSI_ERR("[%s] failed set pinctrl state, rc=%d\n", panel->name,
-		       rc);
-	}
-
-	rc = dsi_pwr_enable_regulator(&panel->power_info, false);
-	if (rc)
-		DSI_ERR("[%s] failed to enable vregs, rc=%d\n",
-				panel->name, rc);
+			DSI_ERR("[%s] failed to enable vregs, rc=%d\n",
+					panel->name, rc);
 #ifdef CONFIG_TOUCH_ILI7881X_TDDI
 	}
 	else
@@ -2340,6 +2423,38 @@ static int dsi_panel_parse_gpios(struct dsi_panel *panel)
 		}
 	}
 
+	panel->reset_config.pw8418_rst_gpio = utils->get_named_gpio(utils->data,
+						"qcom,platform-pw8418-rst-gpio",
+						0);
+	if (!gpio_is_valid(panel->reset_config.pw8418_rst_gpio)) {
+		DSI_DEBUG("[%s] qcom,platform-pw8418-rst-gpio is not set, rc=%d\n",
+			 panel->name, rc);
+		panel->reset_config.pw8418_rst_gpio =
+				utils->get_named_gpio(utils->data,
+					"qcom,platform-pw8418-rst-gpio", 0);
+		if (!gpio_is_valid(panel->reset_config.pw8418_rst_gpio)) {
+			DSI_DEBUG("[%s] qcom,platform-pw8418-rst-gpio is not set, rc=%d\n",
+				 panel->name, rc);
+		}
+	}
+	DSI_INFO("[%s] get pw8418-rst-gpio:%d \n", panel->name, panel->reset_config.pw8418_rst_gpio);
+
+	panel->reset_config.tp_rst_gpio = utils->get_named_gpio(utils->data,
+						"qcom,platform-tp-reset-gpio",
+						0);
+	if (!gpio_is_valid(panel->reset_config.tp_rst_gpio)) {
+		DSI_DEBUG("[%s] qcom,platform-tp-reset-gpio is not set, rc=%d\n",
+			 panel->name, rc);
+		panel->reset_config.tp_rst_gpio =
+				utils->get_named_gpio(utils->data,
+					"qcom,platform-tp-reset-gpio", 0);
+		if (!gpio_is_valid(panel->reset_config.tp_rst_gpio)) {
+			DSI_DEBUG("[%s] qcom,platform-tp-reset-gpio is not set, rc=%d\n",
+				 panel->name, rc);
+		}
+	}
+	DSI_INFO("[%s] get tp-rst-gpio:%d \n", panel->name, panel->reset_config.tp_rst_gpio);
+
 	panel->reset_config.lcd_mode_sel_gpio = utils->get_named_gpio(
 		utils->data, mode_set_gpio_name, 0);
 	if (!gpio_is_valid(panel->reset_config.lcd_mode_sel_gpio))
@@ -3373,6 +3488,8 @@ static int dsi_panel_parse_esd_config(struct dsi_panel *panel)
 			esd_config->status_mode = ESD_MODE_SW_BTA;
 		} else if (!strcmp(string, "reg_read")) {
 			esd_config->status_mode = ESD_MODE_REG_READ;
+		} else if (!strcmp(string, "te_check")) {
+			esd_config->status_mode = ESD_MODE_PANEL_TE;
 		} else if (!strcmp(string, "te_signal_check")) {
 			if (panel->panel_mode == DSI_OP_CMD_MODE) {
 				esd_config->status_mode = ESD_MODE_PANEL_TE;
@@ -3551,6 +3668,15 @@ struct dsi_panel *dsi_panel_get(struct device *parent,
 	if (rc)
 		goto error;
 
+	panel->bb_clk2 = devm_clk_get(parent, "bb_clk2");
+	if (IS_ERR(panel->bb_clk2)) {
+		DSI_ERR("failed to get 8418 bb_clk2, rc=%d\n", IS_ERR(panel->bb_clk2));
+	} else {
+		rc = clk_prepare_enable(panel->bb_clk2);
+		if (rc)
+			DSI_ERR("failed to open 8418 bb_clk2 \n");
+	}
+
 	mutex_init(&panel->panel_lock);
 
 	return panel;
@@ -3567,6 +3693,70 @@ void dsi_panel_put(struct dsi_panel *panel)
 	dsi_panel_esd_config_deinit(&panel->esd_config);
 
 	kfree(panel);
+}
+
+static ssize_t panel_proc_calibrate_state_read(struct file *file, char __user *buf, size_t size, loff_t *ppos)
+{
+	int cnt=0;
+	char buff[12] = {0};
+	cnt=sprintf(buff,"%d\n",calibrate_state);
+	cnt += sprintf(buff + cnt, "\n");
+	if(copy_to_user(buf, buff,sizeof(buff)))
+		pr_err("%s %d copy_to_user \n",__func__,__LINE__);
+	//printk("%s,%d,calibrate_state =%d\n",__func__,__LINE__,calibrate_state);
+	return cnt;
+
+}
+
+static ssize_t panel_proc_calibrate_state_write(struct file *file, const char *buff,size_t len, loff_t *pos)
+{
+	char buf[12] = {0};
+	if(len > 12)
+		len =12;
+	if(copy_from_user(buf, buff, len))
+		pr_err("%s %d copy_from_user \n",__func__,__LINE__);
+	if(buf[0]=='0'||buf[0]==0)
+		calibrate_state = 0;
+        else if(buf[0]=='1'||buf[0]==1)
+		calibrate_state = 1;
+        else if(buf[0]=='2'||buf[0]==2)
+		calibrate_state = 2;
+        else
+                calibrate_state = 4;
+
+	//printk("%s,%d,calibrate_state=%d\n",__func__,__LINE__,calibrate_state);
+	return len;
+}
+
+static const struct file_operations panel_proc_calibrate_state_fops = {
+	.read		= panel_proc_calibrate_state_read,
+	.write		= panel_proc_calibrate_state_write,	
+};
+
+
+static int panel_calibrate_state_creat_proc_entry(void)
+{
+        struct proc_dir_entry *proc_entry_panel;
+
+        proc_entry_panel = proc_create_data("calibrate_state", 0666, NULL, &panel_proc_calibrate_state_fops, NULL);
+	if (IS_ERR_OR_NULL(proc_entry_panel))
+	{
+		pr_err("add /proc/calibrate_state error \n");
+	}
+
+    return 0;
+}
+
+int panel_calibrate_state_get(void)
+{
+	return calibrate_state;
+}
+
+int panel_calibrate_state_set(int state)
+{
+    calibrate_state = state;
+    printk("%s calibrate_state = %d\n",__func__,calibrate_state);
+    return 0;
 }
 
 int dsi_panel_drv_init(struct dsi_panel *panel,
@@ -3622,7 +3812,8 @@ int dsi_panel_drv_init(struct dsi_panel *panel,
 			       panel->name, rc);
 		goto error_gpio_release;
 	}
-
+	panel_calibrate_state_creat_proc_entry();
+	//hq_register_hw_info(HWID_LCM, "ili7807q_fhd_video_txd_20200327");
 	goto exit;
 
 error_gpio_release:
