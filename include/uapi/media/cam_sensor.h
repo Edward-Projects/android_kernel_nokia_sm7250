@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-only WITH Linux-syscall-note */
 /*
- * Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2016-2019, The Linux Foundation. All rights reserved.
  */
 
 #ifndef __UAPI_CAM_SENSOR_H__
@@ -165,6 +165,7 @@ struct cam_cmd_probe {
 	uint32_t    data_mask;
 	uint16_t    camera_id;
 	uint16_t    reserved;
+	char	    hq_sensor_name[32];
 } __attribute__((packed));
 
 /**
@@ -336,6 +337,7 @@ struct cam_cmd_unconditional_wait {
  * @data_rate     : Data rate
  * @mipi_flags    : Mipi flags mask
  * @reserved
+ *
  */
 struct cam_csiphy_info {
 	uint16_t    lane_mask;

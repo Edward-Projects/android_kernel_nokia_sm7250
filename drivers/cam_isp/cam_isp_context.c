@@ -1280,9 +1280,7 @@ static int __cam_isp_ctx_notify_sof_in_activated_state(
 		}
 
 		list_for_each_entry(req, &ctx->active_req_list, list) {
-			req_isp = (struct cam_isp_ctx_req *) req->req_priv;
-			if ((!req_isp->bubble_detected) &&
-				(req->request_id > ctx_isp->reported_req_id)) {
+			if (req->request_id > ctx_isp->reported_req_id) {
 				request_id = req->request_id;
 				ctx_isp->reported_req_id = request_id;
 				__cam_isp_ctx_update_event_record(ctx_isp,
@@ -1507,8 +1505,7 @@ static int __cam_isp_ctx_epoch_in_applied(struct cam_isp_context *ctx_isp,
 	CAM_DBG(CAM_REQ, "move request %lld to active list(cnt = %d), ctx %u",
 		req->request_id, ctx_isp->active_req_cnt, ctx->ctx_id);
 
-	if ((req->request_id > ctx_isp->reported_req_id)
-		&& !req_isp->bubble_report) {
+	if (req->request_id > ctx_isp->reported_req_id) {
 		request_id = req->request_id;
 		ctx_isp->reported_req_id = request_id;
 	}
@@ -2751,8 +2748,9 @@ hw_dump:
 	ctx_isp = (struct cam_isp_context *) ctx->ctx_priv;
 	req_isp = (struct cam_isp_ctx_req *) req->req_priv;
 	cur_time = ktime_get();
-	diff = ktime_us_delta(cur_time,
-		req_isp->event_timestamp[CAM_ISP_CTX_EVENT_APPLY]);
+	diff = ktime_us_delta(
+		req_isp->event_timestamp[CAM_ISP_CTX_EVENT_APPLY],
+		cur_time);
 	if (diff < CAM_ISP_CTX_RESPONSE_TIME_THRESHOLD) {
 		CAM_INFO(CAM_ISP, "req %lld found no error",
 			req->request_id);
@@ -4225,11 +4223,6 @@ end:
 	return rc;
 }
 
-static void cam_req_mgr_process_workq_offline_ife_worker(struct work_struct *w)
-{
-	cam_req_mgr_process_workq(w);
-}
-
 static int __cam_isp_ctx_acquire_hw_v2(struct cam_context *ctx,
 	void *args)
 {
@@ -4354,8 +4347,7 @@ static int __cam_isp_ctx_acquire_hw_v2(struct cam_context *ctx,
 		ctx_isp->offline_context = true;
 
 		rc = cam_req_mgr_workq_create("offline_ife", 20,
-			&ctx_isp->workq, CRM_WORKQ_USAGE_IRQ, 0, false,
-			cam_req_mgr_process_workq_offline_ife_worker);
+			&ctx_isp->workq, CRM_WORKQ_USAGE_IRQ, 0);
 		if (rc)
 			CAM_ERR(CAM_ISP,
 				"Failed to create workq for offline IFE rc:%d",
@@ -4649,7 +4641,7 @@ static int __cam_isp_ctx_start_dev_in_ready(struct cam_context *ctx,
 		ctx->state = CAM_CTX_READY;
 		trace_cam_context_state("ISP", ctx);
 		if (rc == -ETIMEDOUT)
-			cam_isp_ctx_dump_req(req_isp, 0, 0, NULL, false);
+			rc = cam_isp_ctx_dump_req(req_isp, 0, 0, NULL, false);
 		list_del_init(&req->list);
 		list_add(&req->list, &ctx->pending_req_list);
 		goto end;

@@ -49,7 +49,6 @@ void cam_req_mgr_core_link_reset(struct cam_req_mgr_core_link *link)
 	link->initial_skip = true;
 	link->sof_timestamp = 0;
 	link->prev_sof_timestamp = 0;
-	link->skip_wd_validation = false;
 }
 
 void cam_req_mgr_handle_core_shutdown(void)
@@ -224,12 +223,6 @@ static int __cam_req_mgr_notify_error_on_link(
 	struct cam_req_mgr_core_session *session = NULL;
 	struct cam_req_mgr_message       msg;
 	int rc = 0, pd;
-
-	if (!link || !dev) {
-		CAM_ERR(CAM_CRM, "Invalid Arguments link: 0x%x dev: 0x%x!",
-			link, dev);
-		return -EINVAL;
-	}
 
 	session = (struct cam_req_mgr_core_session *)link->parent;
 
@@ -528,13 +521,6 @@ static void __cam_req_mgr_validate_crm_wd_timer(
 	int next_frame_timeout = 0, current_frame_timeout = 0;
 	struct cam_req_mgr_req_queue *in_q = link->req.in_q;
 
-	if (link->skip_wd_validation) {
-		CAM_DBG(CAM_CRM,
-			"skipping modifying wd timer for first frame after streamon");
-		link->skip_wd_validation = false;
-		return;
-	}
-
 	idx = in_q->rd_idx;
 	__cam_req_mgr_dec_idx(
 		&idx, (link->max_delay - 1),
@@ -552,7 +538,6 @@ static void __cam_req_mgr_validate_crm_wd_timer(
 	CAM_DBG(CAM_CRM,
 		"rd_idx: %d idx: %d current_frame_timeout: %d ms",
 		in_q->rd_idx, idx, current_frame_timeout);
-
 	spin_lock_bh(&link->link_state_spin_lock);
 	if (link->watchdog) {
 		if ((next_frame_timeout + CAM_REQ_MGR_WATCHDOG_TIMEOUT) >
@@ -574,8 +559,8 @@ static void __cam_req_mgr_validate_crm_wd_timer(
 			crm_timer_modify(link->watchdog,
 				current_frame_timeout +
 				CAM_REQ_MGR_WATCHDOG_TIMEOUT);
-		} else if (!next_frame_timeout && (link->watchdog->expires >
-			CAM_REQ_MGR_WATCHDOG_TIMEOUT)) {
+		} else if (link->watchdog->expires >
+			CAM_REQ_MGR_WATCHDOG_TIMEOUT) {
 			CAM_DBG(CAM_CRM,
 				"Reset wd timer to default from %d ms to %d ms",
 				link->watchdog->expires,
@@ -1381,7 +1366,6 @@ static int __cam_req_mgr_process_req(struct cam_req_mgr_core_link *link,
 	struct cam_req_mgr_req_queue        *in_q;
 	struct cam_req_mgr_core_session     *session;
 	struct cam_req_mgr_connected_device *dev;
-	uint32_t                             max_retry = 0;
 
 	in_q = link->req.in_q;
 	session = (struct cam_req_mgr_core_session *)link->parent;
@@ -1497,14 +1481,12 @@ static int __cam_req_mgr_process_req(struct cam_req_mgr_core_link *link,
 	if (rc < 0) {
 		/* Apply req failed retry at next sof */
 		slot->status = CRM_SLOT_STATUS_REQ_PENDING;
+
 		link->retry_cnt++;
-		max_retry = MAXIMUM_RETRY_ATTEMPTS;
-		if (link->max_delay == 1)
-			max_retry++;
-		if (link->retry_cnt == max_retry) {
+		if (link->retry_cnt == MAXIMUM_RETRY_ATTEMPTS) {
 			CAM_DBG(CAM_CRM,
-				"Max retry attempts (count: %d) reached on link[0x%x] for req [%lld]",
-				link->retry_cnt, link->link_hdl,
+				"Max retry attempts reached on link[0x%x] for req [%lld]",
+				link->link_hdl,
 				in_q->slot[in_q->rd_idx].req_id);
 			__cam_req_mgr_notify_error_on_link(link, dev);
 			link->retry_cnt = 0;
@@ -2573,8 +2555,6 @@ static int cam_req_mgr_process_trigger(void *priv, void *data)
 		if (idx >= 0) {
 			if (idx == in_q->last_applied_idx)
 				in_q->last_applied_idx = -1;
-			if (idx == in_q->rd_idx)
-				__cam_req_mgr_dec_idx(&idx, 1, in_q->num_slots);
 			__cam_req_mgr_reset_req_slot(link, idx);
 		}
 	}
@@ -2792,7 +2772,6 @@ static int cam_req_mgr_cb_notify_err(
 	notify_err->link_hdl = err_info->link_hdl;
 	notify_err->dev_hdl = err_info->dev_hdl;
 	notify_err->error = err_info->error;
-	notify_err->trigger = err_info->trigger;
 	task->process_cb = &cam_req_mgr_process_error;
 	rc = cam_req_mgr_workq_enqueue_task(task, link, CRM_TASK_PRIORITY_0);
 
@@ -3378,11 +3357,6 @@ end:
 	return rc;
 }
 
-static void cam_req_mgr_process_workq_link_worker(struct work_struct *w)
-{
-	cam_req_mgr_process_workq(w);
-}
-
 int cam_req_mgr_link(struct cam_req_mgr_ver_info *link_info)
 {
 	int                                     rc = 0;
@@ -3461,8 +3435,7 @@ int cam_req_mgr_link(struct cam_req_mgr_ver_info *link_info)
 		link_info->u.link_info_v1.session_hdl, link->link_hdl);
 	wq_flag = CAM_WORKQ_FLAG_HIGH_PRIORITY | CAM_WORKQ_FLAG_SERIAL;
 	rc = cam_req_mgr_workq_create(buf, CRM_WORKQ_NUM_TASKS,
-		&link->workq, CRM_WORKQ_USAGE_NON_IRQ, wq_flag, false,
-		cam_req_mgr_process_workq_link_worker);
+		&link->workq, CRM_WORKQ_USAGE_NON_IRQ, wq_flag);
 	if (rc < 0) {
 		CAM_ERR(CAM_CRM, "FATAL: unable to create worker");
 		__cam_req_mgr_destroy_link_info(link);
@@ -3571,8 +3544,7 @@ int cam_req_mgr_link_v2(struct cam_req_mgr_ver_info *link_info)
 		link_info->u.link_info_v2.session_hdl, link->link_hdl);
 	wq_flag = CAM_WORKQ_FLAG_HIGH_PRIORITY | CAM_WORKQ_FLAG_SERIAL;
 	rc = cam_req_mgr_workq_create(buf, CRM_WORKQ_NUM_TASKS,
-		&link->workq, CRM_WORKQ_USAGE_NON_IRQ, wq_flag, false,
-		cam_req_mgr_process_workq_link_worker);
+		&link->workq, CRM_WORKQ_USAGE_NON_IRQ, wq_flag);
 	if (rc < 0) {
 		CAM_ERR(CAM_CRM, "FATAL: unable to create worker");
 		__cam_req_mgr_destroy_link_info(link);
@@ -3916,7 +3888,6 @@ int cam_req_mgr_link_control(struct cam_req_mgr_link_control *control)
 
 	struct cam_req_mgr_connected_device *dev = NULL;
 	struct cam_req_mgr_link_evt_data     evt_data;
-	int                                init_timeout = 0;
 
 	if (!control) {
 		CAM_ERR(CAM_CRM, "Control command is NULL");
@@ -3948,13 +3919,10 @@ int cam_req_mgr_link_control(struct cam_req_mgr_link_control *control)
 			spin_lock_bh(&link->link_state_spin_lock);
 			link->state = CAM_CRM_LINK_STATE_READY;
 			spin_unlock_bh(&link->link_state_spin_lock);
-			if (control->init_timeout[i])
-				link->skip_wd_validation = true;
-			init_timeout = (2 * control->init_timeout[i]);
 			/* Start SOF watchdog timer */
 			rc = crm_timer_init(&link->watchdog,
-				(init_timeout + CAM_REQ_MGR_WATCHDOG_TIMEOUT),
-				link, &__cam_req_mgr_sof_freeze);
+				CAM_REQ_MGR_WATCHDOG_TIMEOUT, link,
+				&__cam_req_mgr_sof_freeze);
 			if (rc < 0) {
 				CAM_ERR(CAM_CRM,
 					"SOF timer start fails: link=0x%x",
@@ -3985,7 +3953,6 @@ int cam_req_mgr_link_control(struct cam_req_mgr_link_control *control)
 			/* Destroy SOF watchdog timer */
 			spin_lock_bh(&link->link_state_spin_lock);
 			link->state = CAM_CRM_LINK_STATE_IDLE;
-			link->skip_wd_validation = false;
 			crm_timer_exit(&link->watchdog);
 			spin_unlock_bh(&link->link_state_spin_lock);
 		} else {
