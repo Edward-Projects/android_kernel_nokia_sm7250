@@ -5,7 +5,7 @@
 #include "lito-lpi.dtsi"
 
 &bolero {
-	qcom,num-macros = <4>;
+	qcom,num-macros = <3>;
 	bolero-clk-rsc-mngr {
 		compatible = "qcom,bolero-clk-rsc-mngr";
 		qcom,fs-gen-sequence = <0x3000 0x1>,
@@ -318,15 +318,13 @@
 		"VA SWR_MIC7", "DMIC8_OUTPUT";
 	qcom,msm-mbhc-hphl-swh = <1>;
 	qcom,msm-mbhc-gnd-swh = <1>;
-	qcom,cdc-dmic01-gpios = <&cdc_dmic01_gpios>;
-	qcom,cdc-dmic23-gpios = <&cdc_dmic23_gpios>;
-	qcom,cdc-dmic45-gpios = <&cdc_dmic45_gpios>;
+	//qcom,cdc-dmic01-gpios = <&cdc_dmic01_gpios>;
+	//qcom,cdc-dmic23-gpios = <&cdc_dmic23_gpios>;
+	//qcom,cdc-dmic45-gpios = <&cdc_dmic45_gpios>;
 	asoc-codec  = <&stub_codec>, <&bolero>, <&ext_disp_audio_codec>;
 	asoc-codec-names = "msm-stub-codec.1", "bolero_codec",
 			   "msm-ext-disp-audio-codec-rx";
-	qcom,wsa-max-devs = <2>;
-	qcom,wsa-devs = <&wsa881x_0211>, <&wsa881x_0212>,
-			<&wsa881x_0213>, <&wsa881x_0214>;
+	qcom,wsa-max-devs = <0>; // remove wsa config
 	qcom,wsa-aux-dev-prefix = "SpkrLeft", "SpkrRight",
 				  "SpkrLeft", "SpkrRight";
 	qcom,codec-max-aux-devs = <1>;
@@ -337,6 +335,7 @@
 
 &q6core {
 	cdc_dmic01_gpios: cdc_dmic01_pinctrl {
+                status = "disabled";	
 		compatible = "qcom,msm-cdc-pinctrl";
 		pinctrl-names = "aud_active", "aud_sleep";
 		pinctrl-0 = <&cdc_dmic01_clk_active &cdc_dmic01_data_active>;
@@ -346,6 +345,7 @@
 	};
 
 	cdc_dmic23_gpios: cdc_dmic23_pinctrl {
+		status = "disabled";	
 		compatible = "qcom,msm-cdc-pinctrl";
 		pinctrl-names = "aud_active", "aud_sleep";
 		pinctrl-0 = <&cdc_dmic23_clk_active &cdc_dmic23_data_active>;
@@ -355,6 +355,7 @@
 	};
 
 	cdc_dmic45_gpios: cdc_dmic45_pinctrl {
+                status = "disabled";
 		compatible = "qcom,msm-cdc-pinctrl";
 		pinctrl-names = "aud_active", "aud_sleep";
 		pinctrl-0 = <&cdc_dmic45_clk_active &cdc_dmic45_data_active>;
@@ -362,14 +363,7 @@
 		qcom,lpi-gpios;
 		qcom,tlmm-gpio = <127 128>;
 	};
-
-	wsa_swr_gpios: wsa_swr_clk_data_pinctrl {
-		compatible = "qcom,msm-cdc-pinctrl";
-		pinctrl-names = "aud_active", "aud_sleep";
-		pinctrl-0 = <&wsa_swr_clk_active &wsa_swr_data_active>;
-		pinctrl-1 = <&wsa_swr_clk_sleep &wsa_swr_data_sleep>;
-		qcom,lpi-gpios;
-	};
+	
 
 	rx_swr_gpios: rx_swr_clk_data_pinctrl {
 		compatible = "qcom,msm-cdc-pinctrl";
@@ -394,18 +388,13 @@
 };
 
 &soc {
-	wsa_spkr_en1: wsa_spkr_en1_pinctrl {
-		compatible = "qcom,msm-cdc-pinctrl";
-		pinctrl-names = "aud_active", "aud_sleep";
-		pinctrl-0 = <&spkr_1_sd_n_active>;
-		pinctrl-1 = <&spkr_1_sd_n_sleep>;
-	};
-
-	wsa_spkr_en2: wsa_spkr_en2_pinctrl {
-		compatible = "qcom,msm-cdc-pinctrl";
-		pinctrl-names = "aud_active", "aud_sleep";
-		pinctrl-0 = <&spkr_2_sd_n_active>;
-		pinctrl-1 = <&spkr_2_sd_n_sleep>;
+	cdc_sec_mi2s_gpios: msm_cdc_pinctrl_pri {
+			compatible = "qcom,msm-cdc-pinctrl";
+			pinctrl-names = "aud_active", "aud_sleep";
+			pinctrl-0 = <&sec_i2s_sck_active &sec_i2s_ws_active
+					&sec_i2s_data0_active &sec_i2s_data1_active>;
+			pinctrl-1 = <&sec_i2s_sck_sleep &sec_i2s_ws_sleep
+					&sec_i2s_data0_sleep &sec_i2s_data1_sleep>;
 	};
 
 	wcd938x_rst_gpio: msm_cdc_pinctrl@57 {
