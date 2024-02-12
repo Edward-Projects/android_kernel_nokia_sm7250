@@ -16,6 +16,12 @@
 #include "dsi_parser.h"
 #include "sde_dbg.h"
 
+#ifdef CONFIG_TOUCH_ILI7881X_TDDI
+extern int tp_supend_need_power_reset_high(void);
+extern void ili_resume_by_ddi(void);
+extern void tp_gesture_force_recover(bool force);
+#endif
+
 #if defined(CONFIG_PXLW_IRIS3)
 #include "dsi_iris3_api.h"
 #include "dsi_iris3_lp.h"
@@ -456,14 +462,27 @@ static int dsi_panel_set_pinctrl_state(struct dsi_panel *panel, bool enable)
 static int dsi_panel_power_on(struct dsi_panel *panel)
 {
 	int rc = 0;
-
-	rc = dsi_pwr_enable_regulator(&panel->power_info, true);
-	if (rc) {
-		DSI_ERR("[%s] failed to enable vregs, rc=%d\n",
-				panel->name, rc);
-		goto exit;
+#ifdef CONFIG_TOUCH_ILI7881X_TDDI
+	if (!tp_supend_need_power_reset_high()) {
+#endif
+		rc = dsi_pwr_enable_regulator(&panel->power_info, true);
+		if (rc) {
+			DSI_ERR("[%s] failed to enable vregs, rc=%d\n",
+					panel->name, rc);
+			goto exit;
+		}
+#ifdef CONFIG_TOUCH_ILI7881X_TDDI
 	}
-
+	else
+	{
+		rc = regulator_enable(panel->power_info.vregs[vreg_name_vdd].vreg);
+		if (rc){
+			DSI_ERR("[%s] failed to enable vregs, rc=%d\n",
+					panel->name, rc);
+			goto exit;
+		}
+	}
+#endif
 	rc = dsi_panel_set_pinctrl_state(panel, true);
 	if (rc) {
 		DSI_ERR("[%s] failed to set pinctrl, rc=%d\n", panel->name, rc);
@@ -476,6 +495,9 @@ static int dsi_panel_power_on(struct dsi_panel *panel)
 		DSI_ERR("[%s] failed to reset panel, rc=%d\n", panel->name, rc);
 		goto error_disable_gpio;
 	}
+#endif
+#ifdef CONFIG_TOUCH_ILI7881X_TDDI
+	tp_gesture_force_recover(true);
 #endif
 	goto exit;
 
@@ -504,14 +526,21 @@ int dsi_panel_reset_delay(struct dsi_panel *panel)
 		DSI_ERR("[%s] failed to reset panel, rc=%d\n", panel->name, rc);
 		goto error_disable_gpio;
 	}
+#ifdef CONFIG_TOUCH_ILI7881X_TDDI
+        ili_resume_by_ddi();
 #endif
 exit:
 	return rc;
 }
+#endif
 static int dsi_panel_power_off(struct dsi_panel *panel)
 {
 	int rc = 0;
-
+#ifdef CONFIG_TOUCH_ILI7881X_TDDI
+	if (atomic_read(&panel->esd_recovery_pending))
+		tp_gesture_force_recover(false);
+	if (!tp_supend_need_power_reset_high()) {
+#endif
 	if (gpio_is_valid(panel->reset_config.disp_en_gpio))
 		gpio_set_value(panel->reset_config.disp_en_gpio, 0);
 
@@ -539,7 +568,21 @@ static int dsi_panel_power_off(struct dsi_panel *panel)
 	if (rc)
 		DSI_ERR("[%s] failed to enable vregs, rc=%d\n",
 				panel->name, rc);
-
+#ifdef CONFIG_TOUCH_ILI7881X_TDDI
+	}
+	else
+	{
+		if (!IS_ERR(panel->bb_clk2)) {
+			clk_disable_unprepare(panel->bb_clk2);
+			DSI_INFO("[%s] disable bb_clk2", panel->name);
+		}
+		rc = regulator_disable(panel->power_info.vregs[vreg_name_vdd].vreg);
+		if (rc){
+			DSI_ERR("[%s] failed to disable vregs, rc=%d\n",
+					panel->name, rc);
+		}
+	}
+#endif
 	return rc;
 }
 static int dsi_panel_tx_cmd_set(struct dsi_panel *panel,

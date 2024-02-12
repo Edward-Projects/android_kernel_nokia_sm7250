@@ -1355,4 +1355,16 @@ source "drivers/input/touchscreen/focaltech_touch/Kconfig"
 
 source "drivers/input/touchscreen/nt36xxx/Kconfig"
 
+config TOUCH_ILI7881X_TDDI
+	bool "ILI7881X TDDI Touchscreen Driver"
+	depends on SPI_MASTER
+	default n
+	help
+	  Say Y here if you have a Ilitek Touchscreen.
+
+	  If unsure, say N.
+
+	  To compile this driver as a module, choose M here: the
+	  module will be called synaptics_tcm.
+
 endif
