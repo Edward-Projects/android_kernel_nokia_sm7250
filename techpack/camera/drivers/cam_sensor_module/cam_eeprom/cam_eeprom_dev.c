@@ -8,6 +8,36 @@
 #include "cam_eeprom_soc.h"
 #include "cam_eeprom_core.h"
 #include "cam_debug_util.h"
+#include <linux/debugfs.h>
+
+/*******add by hq for factory otp node start******/
+#define OTP_STATE_SIZE  64
+typedef struct {
+	char otp_state[OTP_STATE_SIZE];
+} camera_otp_valid_t;
+
+static struct dentry *hq_camera_dbg_root;
+static struct dentry *hq_otp_dbg_node;
+static camera_otp_valid_t hq_otp_valid[4];
+static char hq_otp_dbg_buf[256];
+//extern struct dentry *camera_dbg_root(void);
+
+struct dentry *camera_dbg_root(void)
+{
+	if (!hq_camera_dbg_root) {
+		hq_camera_dbg_root = debugfs_create_dir("camera_dbg", NULL);
+		if (!hq_camera_dbg_root) {
+			pr_err("%s:%d debugfs_create_dir camera fail!\n",
+				__func__, __LINE__);
+			return NULL;
+		}
+	}
+
+	return hq_camera_dbg_root;
+}
+EXPORT_SYMBOL(camera_dbg_root);
+/*******add by hq for factory otp node end******/
+
 
 static long cam_eeprom_subdev_ioctl(struct v4l2_subdev *sd,
 	unsigned int cmd, void *arg)
@@ -438,6 +468,97 @@ static int cam_eeprom_spi_driver_remove(struct spi_device *sdev)
 
 	return 0;
 }
+/*******add by hq for factory otp node start******/
+static int eeprom_dbg_open(struct inode *inode, struct file *filp)
+{
+	CAM_ERR(CAM_EEPROM, "%s Enter.\n", __func__);
+	filp->private_data = inode->i_private;
+	return 0;
+}
+
+static ssize_t eeprom_dbg_read(struct file *filp, char __user *buffer,
+	size_t count, loff_t *ppos)
+{
+	int i, otp_num, len;
+	int offset = 0;
+
+	CAM_ERR(CAM_EEPROM, "%s Enter. cnt=%d *ppos=%lld\n", __func__, (int)count, (*ppos));
+
+	if (*ppos > 0) {
+		*ppos = 0;
+		return 0;
+	}
+
+	otp_num = sizeof(hq_otp_valid)/sizeof(hq_otp_valid[0]);
+	memset(hq_otp_dbg_buf, 0, sizeof(hq_otp_dbg_buf));
+
+	for (i = 0; i < otp_num; i++) {
+
+		CAM_ERR(CAM_EEPROM, "hq_otp_valid[%d] %s\n", i, hq_otp_valid[i].otp_state);
+
+		if (strlen(hq_otp_valid[i].otp_state) > 0) {
+			len = snprintf(hq_otp_dbg_buf + offset, sizeof(hq_otp_dbg_buf) - offset, "%s;", hq_otp_valid[i].otp_state);
+			offset += len;
+		}
+	}
+
+	if (copy_to_user(buffer, hq_otp_dbg_buf, offset))
+		return -EFAULT;
+
+	*ppos += offset;
+
+	CAM_ERR(CAM_EEPROM, "%s Exit.\n", __func__);
+	return offset;
+}
+
+static ssize_t eeprom_dbg_write(struct file *filp, const char __user *buffer,
+	size_t count, loff_t *ppos)
+{
+	int i, otp_num;
+
+	CAM_ERR(CAM_EEPROM, "%s Enter. cnt=%d *ppos=%lld", __func__, (int)count, (*ppos));
+
+	if (*ppos >= OTP_STATE_SIZE)
+		return 0;
+	if (*ppos + count > OTP_STATE_SIZE)
+		count = OTP_STATE_SIZE - *ppos;
+
+	memset(hq_otp_dbg_buf, 0, sizeof(hq_otp_dbg_buf));
+	if (copy_from_user(hq_otp_dbg_buf, buffer, count))
+		return -EFAULT;
+
+	otp_num = sizeof(hq_otp_valid)/sizeof(hq_otp_valid[0]);
+	for (i = 0; i < otp_num; i++) {
+		CAM_ERR(CAM_EEPROM, "hq_otp_valid[%d] %s\n", i, hq_otp_valid[i].otp_state);
+		if (!strncmp(hq_otp_dbg_buf, hq_otp_valid[i].otp_state, 6)
+			|| !strlen(hq_otp_valid[i].otp_state)) {
+			break;
+		}
+	}
+	if (i >= otp_num) {
+		CAM_ERR(CAM_EEPROM, "hq_otp_valid[%d] overflow.\n", i);
+		return -EFAULT;
+	}
+
+	memset(hq_otp_valid[i].otp_state, 0,
+		sizeof(hq_otp_valid[i].otp_state));
+	strlcpy(hq_otp_valid[i].otp_state,
+		hq_otp_dbg_buf, OTP_STATE_SIZE - 1);
+
+	*ppos = 0;
+
+	CAM_ERR(CAM_EEPROM, "%s Exit.\n", __func__);
+
+	return count;
+}
+
+static const struct file_operations eeprom_debug_fops = {
+	.owner = THIS_MODULE,
+	.open = eeprom_dbg_open,
+	.read = eeprom_dbg_read,
+	.write = eeprom_dbg_write,
+};
+/*******add by hq for factory otp node end******/
 
 static int32_t cam_eeprom_platform_driver_probe(
 	struct platform_device *pdev)
@@ -445,6 +566,7 @@ static int32_t cam_eeprom_platform_driver_probe(
 	int32_t                         rc = 0;
 	struct cam_eeprom_ctrl_t       *e_ctrl = NULL;
 	struct cam_eeprom_soc_private  *soc_private = NULL;
+	struct dentry *cam_dbg_root = NULL;
 
 	e_ctrl = kzalloc(sizeof(struct cam_eeprom_ctrl_t), GFP_KERNEL);
 	if (!e_ctrl)
@@ -501,6 +623,20 @@ static int32_t cam_eeprom_platform_driver_probe(
 	e_ctrl->cam_eeprom_state = CAM_EEPROM_INIT;
 	e_ctrl->open_cnt = 0;
 
+/*******add by hq for factory otp node start******/
+	cam_dbg_root = camera_dbg_root();
+	if (cam_dbg_root) {
+		if (!hq_otp_dbg_node) {
+			memset(hq_otp_valid, 0, sizeof(hq_otp_valid));
+			hq_otp_dbg_node = debugfs_create_file("otp_state",
+				0666, cam_dbg_root, NULL, &eeprom_debug_fops);
+			if (!hq_otp_dbg_node) {
+				pr_err("%s:%d debugfs_create_file otp_valid fail!\n",
+					__func__, __LINE__);
+			}
+		}
+	}
+/*******add by hq for factory otp node end******/
 	return rc;
 free_soc:
 	kfree(soc_private);

@@ -12,6 +12,9 @@
 #include "cam_trace.h"
 #include "cam_common_util.h"
 #include "cam_packet_util.h"
+//wyc add for hardware info
+#include <linux/hqsysfs.h>
+//wyc add for hardware info
 
 static void cam_sensor_update_req_mgr(
 	struct cam_sensor_ctrl_t *s_ctrl,
@@ -477,14 +480,17 @@ int32_t cam_sensor_update_slave_info(struct cam_cmd_probe *probe_info,
 	s_ctrl->pipeline_delay =
 		probe_info->reserved;
 
+	memcpy(s_ctrl->sensordata->slave_info.hq_sensor_name,probe_info->hq_sensor_name,sizeof(probe_info->hq_sensor_name));
+
 	s_ctrl->sensor_probe_addr_type =  probe_info->addr_type;
 	s_ctrl->sensor_probe_data_type =  probe_info->data_type;
-	CAM_DBG(CAM_SENSOR,
-		"Sensor Addr: 0x%x sensor_id: 0x%x sensor_mask: 0x%x sensor_pipeline_delay:0x%x",
+	CAM_ERR(CAM_SENSOR,
+		"Sensor Addr: 0x%x sensor_id: 0x%x sensor_mask: 0x%x sensor_pipeline_delay:0x%x sensor_name: %s",
 		s_ctrl->sensordata->slave_info.sensor_id_reg_addr,
 		s_ctrl->sensordata->slave_info.sensor_id,
 		s_ctrl->sensordata->slave_info.sensor_id_mask,
-		s_ctrl->pipeline_delay);
+		s_ctrl->pipeline_delay,
+		s_ctrl->sensordata->slave_info.hq_sensor_name);
 	return rc;
 }
 
@@ -882,6 +888,28 @@ int32_t cam_sensor_driver_cmd(struct cam_sensor_ctrl_t *s_ctrl,
 			s_ctrl->sensordata->slave_info.sensor_slave_addr,
 			s_ctrl->sensordata->slave_info.sensor_id);
 
+		//wyc add for hardware info
+		if (s_ctrl->sensordata->hq_cam_pos == 0){		
+		hq_register_hw_info(HWID_WIDE_CAM,s_ctrl->sensordata->slave_info.hq_sensor_name);
+		CAM_ERR(CAM_SENSOR,"WYC----WIDE CAM: %s",s_ctrl->sensordata->slave_info.hq_sensor_name);		
+		}
+		if (s_ctrl->sensordata->hq_cam_pos == 1){		
+		hq_register_hw_info(HWID_FRONT_CAM,s_ctrl->sensordata->slave_info.hq_sensor_name);
+		CAM_ERR(CAM_SENSOR,"WYC----FRONT CAM: %s",s_ctrl->sensordata->slave_info.hq_sensor_name);		
+		}
+		if (s_ctrl->sensordata->hq_cam_pos == 2){		
+		hq_register_hw_info(HWID_DEPTH_CAM,s_ctrl->sensordata->slave_info.hq_sensor_name);
+		CAM_ERR(CAM_SENSOR,"WYC----DEPTH CAM: %s",s_ctrl->sensordata->slave_info.hq_sensor_name);		
+		}
+		if (s_ctrl->sensordata->hq_cam_pos == 3){		
+		hq_register_hw_info(HWID_MAIN_CAM,s_ctrl->sensordata->slave_info.hq_sensor_name);
+		CAM_ERR(CAM_SENSOR,"WYC----MAIN CAM: %s",s_ctrl->sensordata->slave_info.hq_sensor_name);		
+		}
+		if (s_ctrl->sensordata->hq_cam_pos == 4){		
+		hq_register_hw_info(HWID_MICRO_CAM,s_ctrl->sensordata->slave_info.hq_sensor_name);
+		CAM_ERR(CAM_SENSOR,"WYC----MICRO CAM: %s",s_ctrl->sensordata->slave_info.hq_sensor_name);		
+		}
+		//wyc add for hardware info
 		cam_sensor_free_power_reg_rsc(s_ctrl);
 		rc = cam_sensor_power_down(s_ctrl);
 		if (rc < 0) {

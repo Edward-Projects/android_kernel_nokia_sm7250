@@ -702,6 +702,7 @@ static int cam_vfe_camif_process_cmd(struct cam_isp_resource_node *rsrc_node,
 		break;
 	case CAM_ISP_HW_CMD_CAMIF_DATA:
 		rc = cam_vfe_camif_dump_timestamps(rsrc_node, cmd_args);
+		break;
 	case CAM_ISP_HW_CMD_GET_IRQ_REGISTER_DUMP:
 		rc = cam_vfe_camif_irq_reg_dump(rsrc_node);
 		break;

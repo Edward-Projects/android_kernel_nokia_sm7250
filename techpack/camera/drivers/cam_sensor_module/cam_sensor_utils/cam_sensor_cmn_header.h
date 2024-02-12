@@ -330,6 +330,7 @@ struct cam_camera_slave_info {
 	uint16_t sensor_id;
 	uint16_t sensor_id_mask;
 	uint8_t  i2c_freq_mode;
+	char     hq_sensor_name[32];  //wyc add for product_info
 };
 
 struct msm_sensor_init_params {
@@ -376,6 +377,7 @@ struct cam_sensor_board_info {
 	int32_t pos_roll;
 	int32_t pos_yaw;
 	int32_t pos_pitch;
+	int32_t hq_cam_pos;//wyc add for product_info
 	int32_t  subdev_id[SUB_MODULE_MAX];
 	int32_t  subdev_intf[SUB_MODULE_MAX];
 	const char *misc_regulator;

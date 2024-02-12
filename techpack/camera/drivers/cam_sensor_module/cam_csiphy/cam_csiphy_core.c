@@ -48,6 +48,11 @@ static int cam_csiphy_notify_secure_mode(struct csiphy_device *csiphy_dev,
 		CAM_ERR(CAM_CSIPHY, "scm call to hypervisor failed");
 		return -EINVAL;
 	}
+	CAM_INFO(CAM_CSIPHY, "PHY : %d offset: %d SEC: %d Mask: %d",
+			csiphy_dev->soc_info.index,
+			offset,
+			protect,
+			csiphy_dev->csiphy_cpas_cp_reg_mask[offset]);
 
 	return 0;
 }

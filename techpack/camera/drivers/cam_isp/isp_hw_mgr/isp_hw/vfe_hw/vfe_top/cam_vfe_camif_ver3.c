@@ -871,6 +871,7 @@ static int cam_vfe_camif_ver3_process_cmd(
 		break;
 	case CAM_ISP_HW_CMD_CAMIF_DATA:
 		rc = cam_vfe_camif_ver3_dump_timestamps(rsrc_node, cmd_args);
+		break;
 	case CAM_ISP_HW_CMD_GET_IRQ_REGISTER_DUMP:
 		rc = cam_vfe_camif_ver3_irq_reg_dump(rsrc_node);
 		break;
