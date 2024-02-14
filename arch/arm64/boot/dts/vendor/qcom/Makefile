@@ -70,35 +70,10 @@ dtb-$(CONFIG_ARCH_KONA) += kona-rumi.dtb \
 endif
 
 ifeq ($(CONFIG_BUILD_ARM64_DT_OVERLAY),y)
-dtbo-$(CONFIG_ARCH_LITO) += lito-rumi-overlay.dtbo \
-                lito-mtp-overlay.dtbo \
-                lito-v2-mtp-overlay.dtbo \
-                lito-cdp-overlay.dtbo \
-                lito-v2-cdp-overlay.dtbo \
-                lito-atp-overlay.dtbo \
-                lito-v2-atp-overlay.dtbo \
-                lito-v2-atp-lcd-overlay.dtbo \
-                lito-qrd-overlay.dtbo \
-                lito-v2-qrd-overlay.dtbo \
-                litomagnus-mtp-overlay.dtbo \
-                litomagnus-cdp-overlay.dtbo \
-                orchid-mtp-overlay.dtbo \
-                orchid-cdp-overlay.dtbo
+dtbo-$(CONFIG_ARCH_LITO) += \
+                groot-v2-qrd-overlay.dtbo \
 
-lito-rumi-overlay.dtbo-base := lito.dtb lito-v2.dtb
-lito-mtp-overlay.dtbo-base := lito.dtb
-lito-v2-mtp-overlay.dtbo-base := lito-v2.dtb
-lito-cdp-overlay.dtbo-base := lito.dtb
-lito-v2-cdp-overlay.dtbo-base := lito-v2.dtb
-lito-atp-overlay.dtbo-base := lito.dtb
-lito-v2-atp-overlay.dtbo-base := lito-v2.dtb
-lito-v2-atp-lcd-overlay.dtbo-base := lito-v2.dtb
-lito-qrd-overlay.dtbo-base := lito.dtb
-lito-v2-qrd-overlay.dtbo-base := lito-v2.dtb
-litomagnus-mtp-overlay.dtbo-base := litomagnus.dtb
-litomagnus-cdp-overlay.dtbo-base := litomagnus.dtb
-orchid-mtp-overlay.dtbo-base := orchid.dtb
-orchid-cdp-overlay.dtbo-base := orchid.dtb
+groot-v2-qrd-overlay.dtbo-base := lito-v2.dtb
 else
 dtb-$(CONFIG_ARCH_LITO) += lito-rumi.dtb \
                 lito-mtp.dtb \
