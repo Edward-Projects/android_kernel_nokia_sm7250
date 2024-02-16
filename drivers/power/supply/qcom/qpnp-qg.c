@@ -36,8 +36,9 @@
 #include "qg-soc.h"
 #include "qg-battery-profile.h"
 #include "qg-defs.h"
+#include <linux/hqsysfs.h>
 
-static int qg_debug_mask;
+static int qg_debug_mask = QG_DEBUG_PON;
 
 static int qg_esr_mod_count = 30;
 static ssize_t esr_mod_count_show(struct device *dev, struct device_attribute
@@ -4888,6 +4889,10 @@ static int qpnp_qg_probe(struct platform_device *pdev)
 	}
 
 	qg_get_battery_capacity(chip, &soc);
+
+	//register hw info
+	hq_register_hw_info(HWID_BATTERY, (char *)qg_get_battery_type(chip));
+
 
 	pr_info("QG initialized! battery_profile=%s SOC=%d QG_subtype=%d QG_version=%s QG_mode=%s\n",
 			qg_get_battery_type(chip), soc, chip->qg_subtype,

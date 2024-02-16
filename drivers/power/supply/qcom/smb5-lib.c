@@ -705,6 +705,13 @@ int smblib_set_charge_param(struct smb_charger *chg,
 		val_raw = (val_u - param->min_u) / param->step_u;
 	}
 
+	if ((param->reg == USBIN_CONT_AICL_THRESHOLD_REG) || (param->reg == USBIN_5V_AICL_THRESHOLD_REG)) {
+
+	   smblib_dbg(chg, PR_REGISTER, "Do not set AICL THRESHOLED: %s = %d (0x%02x)!\n",
+	      param->name, val_u, val_raw);
+	   return rc;
+	}
+
 	rc = smblib_write(chg, param->reg, val_raw);
 	if (rc < 0) {
 		smblib_err(chg, "%s: Couldn't write 0x%02x to 0x%04x rc=%d\n",
@@ -1863,13 +1870,20 @@ int smblib_vbus_regulator_enable(struct regulator_dev *rdev)
 	struct smb_charger *chg = rdev_get_drvdata(rdev);
 	int rc;
 
-	smblib_dbg(chg, PR_OTG, "enabling OTG\n");
+	smblib_dbg(chg, PR_OTG, "enabling OTG VBOOST_5P2V ####\n");
 
 	rc = smblib_masked_write(chg, DCDC_CMD_OTG_REG, OTG_EN_BIT, OTG_EN_BIT);
 	if (rc < 0) {
 		smblib_err(chg, "Couldn't enable OTG rc=%d\n", rc);
 		return rc;
 	}
+
+	//rewrite 0x1156 and 0x1186, solve otg voltage fall down when current is too high.
+	rc = smblib_masked_write(chg, OTG_FAULT_CONDITION_CFG_REG,
+					USBIN_LVUV_FAULT_EN_BIT, 0);
+
+	rc = smblib_masked_write(chg, DCDC_VBOOST_CFG_REG,
+					VBOOST_VOLTAGE_MASK, VBOOST_5P2V);
 
 	return 0;
 }
@@ -2345,6 +2359,25 @@ int smblib_get_batt_current_now(struct smb_charger *chg,
 	return rc;
 }
 
+int smblib_get_prop_battery_charging_enabled(struct smb_charger *chg,
+                union power_supply_propval *val)
+{
+       int rc;
+       u8 reg;
+
+       rc = smblib_read(chg, CHARGING_ENABLE_CMD_REG, &reg);
+       if (rc < 0) {
+               smblib_err(chg,
+                       "Couldn't read battery CHARGING_ENABLE_CMD rc=%d\n",
+                       rc);
+               return rc;
+       }
+
+       reg = reg & CHARGING_ENABLE_CMD_BIT;
+       val->intval = (reg == CHARGING_ENABLE_CMD_BIT);
+       return 0;
+}
+
 /***********************
  * BATTERY PSY SETTERS *
  ***********************/
@@ -2353,6 +2386,8 @@ int smblib_set_prop_input_suspend(struct smb_charger *chg,
 				  const union power_supply_propval *val)
 {
 	int rc;
+
+	smblib_dbg(chg, PR_MISC, "%s intval= %x\n",__FUNCTION__,val->intval);
 
 	/* vote 0mA when suspended */
 	rc = vote(chg->usb_icl_votable, USER_VOTER, (bool)val->intval, 0);
@@ -2371,6 +2406,35 @@ int smblib_set_prop_input_suspend(struct smb_charger *chg,
 
 	power_supply_changed(chg->batt_psy);
 	return rc;
+}
+
+int smblib_set_prop_battery_charging_enabled(struct smb_charger *chg,
+                const union power_supply_propval *val)
+{
+       int rc;
+
+       smblib_dbg(chg, PR_MISC, "%s intval= %x\n",__FUNCTION__,val->intval);
+
+		if (1 == val->intval) {
+	       rc = smblib_masked_write(chg, CHARGING_ENABLE_CMD_REG,
+                       CHARGING_ENABLE_CMD_BIT,CHARGING_ENABLE_CMD_BIT);
+               if (rc < 0) {
+                       smblib_err(chg, "SMB couldn't enable charging, rc=%d\n", rc);
+                       return rc;
+               }
+               smblib_dbg(chg, PR_MISC, "Enable charging\n");
+       } else if (0 == val->intval) {
+	       rc = smblib_masked_write(chg, CHARGING_ENABLE_CMD_REG,
+                       CHARGING_ENABLE_CMD_BIT,0);
+               if (rc < 0) {
+                       smblib_err(chg, "SMB couldn't disable charging, rc=%d\n", rc);
+                       return rc;
+               }
+               smblib_dbg(chg, PR_MISC, "Disable charging\n");
+       } else
+               smblib_err(chg, "Couldn't disable charging rc=%d\n",rc);
+
+       return 0;
 }
 
 int smblib_set_prop_batt_capacity(struct smb_charger *chg,
@@ -3340,6 +3404,9 @@ int smblib_get_prop_usb_voltage_max_design(struct smb_charger *chg,
 			break;
 		}
 		/* else, fallthrough */
+		/*To limit only QC2.0 to 9V*/
+		val->intval = MICRO_9V;
+		break;
 	case POWER_SUPPLY_TYPE_USB_HVDCP_3P5:
 	case POWER_SUPPLY_TYPE_USB_HVDCP_3:
 	case POWER_SUPPLY_TYPE_USB_PD:
@@ -3699,19 +3766,29 @@ static int smblib_get_prop_ufp_mode(struct smb_charger *chg)
 	}
 	smblib_dbg(chg, PR_REGISTER, "TYPE_C_STATUS_1 = 0x%02x\n", stat);
 
+	/* config 0x154A to 0x17 */
+	if (stat & (SNK_DAM_500MA_BIT | SNK_DAM_1500MA_BIT | SNK_DAM_3000MA_BIT))
+	{
+		smblib_masked_write(chg, TYPE_C_DEBUG_ACCESS_SINK_REG,
+			TYPEC_DEBUG_ACCESS_SINK_MASK, 0x17);
+	}
+
 	switch (stat & DETECTED_SRC_TYPE_MASK) {
 	case SNK_RP_STD_BIT:
+	case SNK_DAM_500MA_BIT:
 		return POWER_SUPPLY_TYPEC_SOURCE_DEFAULT;
 	case SNK_RP_1P5_BIT:
+	case SNK_DAM_1500MA_BIT:
 		return POWER_SUPPLY_TYPEC_SOURCE_MEDIUM;
 	case SNK_RP_3P0_BIT:
+	case SNK_DAM_3000MA_BIT:
 		return POWER_SUPPLY_TYPEC_SOURCE_HIGH;
 	case SNK_RP_SHORT_BIT:
 		return POWER_SUPPLY_TYPEC_NON_COMPLIANT;
-	case SNK_DAM_500MA_BIT:
+	/*case SNK_DAM_500MA_BIT:
 	case SNK_DAM_1500MA_BIT:
 	case SNK_DAM_3000MA_BIT:
-		return POWER_SUPPLY_TYPEC_SINK_DEBUG_ACCESSORY;
+		return POWER_SUPPLY_TYPEC_SINK_DEBUG_ACCESSORY;*/
 	default:
 		break;
 	}
@@ -5187,8 +5264,16 @@ irqreturn_t usbin_uv_irq_handler(int irq, void *data)
 	const struct apsd_result *apsd = smblib_get_apsd_result(chg);
 	int rc;
 	u8 stat = 0, max_pulses = 0;
+	union power_supply_propval pval = {0,};
 
-	smblib_dbg(chg, PR_INTERRUPT, "IRQ: %s\n", irq_data->name);
+	rc = power_supply_get_property(chg->usb_psy,
+			POWER_SUPPLY_PROP_VOLTAGE_NOW, &pval);
+	if (rc < 0) {
+		smblib_err(chg, "Couldn't get usb vbus voltage rc=%d\n", rc);
+		return IRQ_HANDLED;
+	}
+
+	smblib_dbg(chg, PR_MISC, "IRQ: %s VBUS: %d mA\n", irq_data->name, pval.intval/1000);
 
 	if ((chg->wa_flags & WEAK_ADAPTER_WA)
 			&& is_storming(&irq_data->storm_data)) {
@@ -7073,8 +7158,16 @@ irqreturn_t usbin_ov_irq_handler(int irq, void *data)
 	struct smb_charger *chg = irq_data->parent_data;
 	u8 stat;
 	int rc;
+	union power_supply_propval pval = {0,};
 
-	smblib_dbg(chg, PR_INTERRUPT, "IRQ: %s\n", irq_data->name);
+	rc = power_supply_get_property(chg->usb_psy,
+			POWER_SUPPLY_PROP_VOLTAGE_NOW, &pval);
+	if (rc < 0) {
+		smblib_err(chg, "Couldn't get usb vbus voltage rc=%d\n", rc);
+		return IRQ_HANDLED;
+	}
+
+	smblib_dbg(chg, PR_MISC, "IRQ: %s VBUS: %d mA\n", irq_data->name, pval.intval/1000);
 
 	if (!(chg->wa_flags & USBIN_OV_WA))
 		return IRQ_HANDLED;

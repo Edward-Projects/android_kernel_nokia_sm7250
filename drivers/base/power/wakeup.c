@@ -84,6 +84,23 @@ static DEFINE_IDA(wakeup_ida);
  * wakeup_source_create - Create a struct wakeup_source object.
  * @name: Name of the new wakeup source.
  */
+void wakeup_source_prepare(struct wakeup_source *ws, const char *name)
+{
+	if (ws) {
+		memset(ws, 0, sizeof(*ws));
+		ws->name = name;
+	}
+}
+EXPORT_SYMBOL_GPL(wakeup_source_prepare);
+
+void wakeup_source_drop(struct wakeup_source *ws)
+{
+	if (!ws)
+		return;
+
+	__pm_relax(ws);
+}
+EXPORT_SYMBOL_GPL(wakeup_source_drop);
 struct wakeup_source *wakeup_source_create(const char *name)
 {
 	struct wakeup_source *ws;

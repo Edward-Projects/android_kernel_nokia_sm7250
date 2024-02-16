@@ -184,6 +184,29 @@ static ssize_t rcu_normal_store(struct kobject *kobj,
 KERNEL_ATTR_RW(rcu_normal);
 #endif /* #ifndef CONFIG_TINY_RCU */
 
+static ssize_t restart_modem_show(struct kobject *kobj,
+				       struct kobj_attribute *attr, char *buf)
+{
+	return sprintf(buf, "restart modem by write 1\n");
+}
+
+extern void restart_modem_by_sysnode(void);
+static ssize_t restart_modem_store(struct kobject *kobj,
+				   struct kobj_attribute *attr,
+				   const char *buf, size_t count)
+{
+	unsigned long cnt;
+
+	if (kstrtoul(buf, 0, &cnt))
+		return -EINVAL;
+
+	if (cnt == 1)
+		restart_modem_by_sysnode();
+
+	return count;
+}
+KERNEL_ATTR_RW(restart_modem);
+
 /*
  * Make /sys/kernel/notes give the raw contents of our kernel .notes section.
  */
@@ -212,6 +235,7 @@ EXPORT_SYMBOL_GPL(kernel_kobj);
 
 static struct attribute * kernel_attrs[] = {
 	&fscaps_attr.attr,
+	&restart_modem_attr.attr,
 	&uevent_seqnum_attr.attr,
 #ifdef CONFIG_UEVENT_HELPER
 	&uevent_helper_attr.attr,
