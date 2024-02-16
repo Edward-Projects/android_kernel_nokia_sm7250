@@ -146,6 +146,15 @@ enum ufs_desc_def_size {
 	QUERY_DESC_HEALTH_DEF_SIZE		= 0x25,
 };
 
+/*get ufs infomations----start*/
+struct ufs_health_info {
+	/*device health descriptor info */
+	u8 pre_elo_info;
+	u8 dev_life_time_A;
+	u8 dev_life_time_B;
+};
+/*get ufs infomations----end*/
+
 /* Unit descriptor parameters offsets in bytes*/
 enum unit_desc_param {
 	UNIT_DESC_PARAM_LEN			= 0x0,
@@ -636,6 +645,7 @@ struct ufs_dev_info {
  */
 struct ufs_dev_desc {
 	u16 wmanufacturerid;
+	u16 manufacture_date;
 	char model[MAX_MODEL_LEN + 1];
 	u16 wspecversion;
 };

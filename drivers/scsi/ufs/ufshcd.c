@@ -50,6 +50,8 @@
 #include "ufs-sysfs.h"
 #include "ufs-debugfs.h"
 #include "ufs-qcom.h"
+#include <linux/hqsysfs.h>
+#include "ufs.h"
 
 static bool ufshcd_wb_sup(struct ufs_hba *hba);
 static int ufshcd_wb_ctrl(struct ufs_hba *hba, bool enable);
@@ -321,6 +323,19 @@ enum {
 	UFSHCD_UIC_TL_ERROR = (1 << 4), /* Transport Layer error */
 	UFSHCD_UIC_DME_ERROR = (1 << 5), /* DME error */
 };
+
+/*get ufs infomations----start*/
+enum field_width {
+	BYTE = 1,
+	WORD = 2,
+};
+struct desc_field_offset {
+	char *name;
+	int offset;
+	enum field_width width_byte;
+};
+#define SIZE_1G (1024*1024*1024)
+/*get ufs infomations----end*/
 
 #define DEFAULT_UFSHCD_DBG_PRINT_EN	UFSHCD_DBG_PRINT_ALL
 
@@ -8438,6 +8453,165 @@ static int ufshcd_set_low_vcc_level(struct ufs_hba *hba,
 	return ret;
 }
 
+/*get ufs infomations----start*/
+char ufs_product_info[90];
+char ufs_more[90];
+
+static int get_ufs_size(struct ufs_hba *hba)
+{
+	int i;
+	int ret;
+	u8 *total_size = NULL;
+	u64 total_size_s;
+	u64 ufs_size = 0;
+
+	if(hba->desc_size.geom_desc) {
+		total_size = kmalloc(hba->desc_size.geom_desc, GFP_KERNEL);
+		if(!total_size) {
+			ret = -ENOMEM;
+			dev_err(hba->dev, "%s, Failed to allocate total_size\n", __func__);
+			return ret;
+		}
+	}
+
+	for(i = 0; i<8; i++)
+	ret = ufshcd_read_desc(hba, QUERY_DESC_IDN_GEOMETRY, 0,
+					total_size, hba->desc_size.geom_desc);
+	total_size_s = ((u64)total_size[11] << 0 |
+					(u64)total_size[10] << 8 |
+					(u64)total_size[9] << 16 |
+					(u64)total_size[8] << 24 |
+					(u64)total_size[7] << 32 |
+					(u64)total_size[6] << 40 |
+					(u64)total_size[5] << 48 |
+					(u64)total_size[4] << 56);
+	if (ret) {
+		dev_warn(hba->dev, "%s: cannot get raw device capacity %d\n",
+			 dev_name(hba->dev), ret);
+		/* fallback to singel frame write */
+		total_size_s = 1;
+	}
+	
+	ufs_size = (total_size_s * 512) / SIZE_1G;
+	if (ufs_size <= 8)
+		return 8;
+	else if (ufs_size <= 16)
+		return 16;
+	else if (ufs_size <= 32)
+		return 32;
+	else if (ufs_size <= 64)
+		return 64;
+	else if (ufs_size <= 128)
+		return 128;
+	else if (ufs_size <= 256)
+		return 256;
+
+	pr_err("There is no proper ufs size found BUG\n");
+	return 0;
+}
+
+static int ufs_read_health_desc_data(struct ufs_hba *hba)
+{
+	int err = 0;
+	int buff_len = QUERY_DESC_HEALTH_DEF_SIZE;
+	u8 desc_buf[QUERY_DESC_HEALTH_DEF_SIZE];
+
+	struct desc_field_offset health_desc_field_name[] = {
+		{"bLength",             0x00, BYTE},
+		{"bDescriptorIDN",      0x01, BYTE},
+		{"bPreEOLInfo",         0x02, BYTE},
+		{"bDeviceLifeTimeEstA", 0x03, BYTE},
+		{"bDeviceLifeTimeEstB", 0x04, BYTE},
+	};
+
+	pm_runtime_get_sync(hba->dev);
+	err = ufshcd_read_desc(hba, QUERY_DESC_IDN_HEALTH, 0, desc_buf, buff_len);
+	pm_runtime_put_sync(hba->dev);
+
+	dev_warn(hba->dev, "%s: idn_health %d\n",
+			 dev_name(hba->dev), err);
+
+	if (!err) {
+		struct desc_field_offset *tmp;
+
+		tmp = &health_desc_field_name[2];
+		hba->health_info.pre_elo_info = (u8)desc_buf[tmp->offset];
+		
+		tmp = &health_desc_field_name[3];
+		hba->health_info.dev_life_time_A= (u8)desc_buf[tmp->offset];
+
+		tmp = &health_desc_field_name[4];
+		hba->health_info.dev_life_time_B= (u8)desc_buf[tmp->offset];
+	}
+	return 0;
+}
+
+
+void ufs_add_ufsinfo_to_productinfo(struct ufs_hba *hba)
+{
+	char type_a[10];
+	char type_b[10];
+	char life_time_a = 0, life_time_b = 0;
+	char mdt_year =0,mdt_month=0;
+	const char * eol_str ;
+	int ufs_size;
+	struct scsi_device *sdev = hba->sdev_ufs_device;
+	printk("enter %s\n",__func__);
+	if(!hba || !sdev)
+		return;
+
+	memset(ufs_product_info,0,sizeof(ufs_product_info));
+	memset(ufs_more,0,sizeof(ufs_more));
+	memset(type_a,0,sizeof(type_a));
+	memset(type_b,0,sizeof(type_b));
+	ufs_size = get_ufs_size(hba);
+	mdt_month = (hba->manufacture_date >> 8 & 0xff);
+	mdt_year = (hba->manufacture_date  & 0xff);
+	snprintf(ufs_product_info, sizeof(ufs_product_info),
+		"STOR_SIZE:%dG(UFS),MNM %.8s,PNM %.16s,FWV %.4s,MDT 20%.2x/%.2x PQ: %d", ufs_size,sdev->vendor, 
+	sdev->model,sdev->rev,mdt_year,mdt_month,sdev->inq_periph_qual);
+	hq_register_hw_info(HWID_UFS,
+		ufs_product_info);
+	life_time_a = hba->health_info.dev_life_time_A;
+	life_time_b = hba->health_info.dev_life_time_B;
+	if (life_time_a < 0xb) {
+		sprintf(type_a, "%d%%~%d%%", life_time_a-1>0?((life_time_a-1)*10):0,
+			life_time_a*10);
+	} else {
+		sprintf(type_a, "%d Max", life_time_a);
+	}
+
+	if (life_time_b < 0xb) {
+		sprintf(type_b, "%d%%~%d%%", life_time_b-1>0?((life_time_b-1)*10):0,
+			life_time_b*10);
+	} else {
+		sprintf(type_b, "%d Max", life_time_b);
+	}
+	switch(hba->health_info.pre_elo_info) {
+		case 0:
+			eol_str = "Not Defined";
+			break;
+		case 1:
+			eol_str = "Normal";
+			break;
+		case 2:
+			eol_str = "Warning";
+			break;
+		case 3:
+			eol_str = "Urgent";
+			break;
+		default:
+			eol_str = "Reserved";
+	}
+	snprintf(ufs_more, sizeof(ufs_more), "TYPE_A %s, TYPE_B %s, EOL %s",type_a, type_b,eol_str);
+	hq_register_hw_info(HWID_UFS_MORE,
+		ufs_more);
+	return ;
+
+
+}
+/*get ufs infomations----end*/
+
 /**
  * ufshcd_scsi_add_wlus - Adds required W-LUs
  * @hba: per-adapter instance
@@ -8491,8 +8665,10 @@ static int ufshcd_scsi_add_wlus(struct ufs_hba *hba)
 		ufshcd_upiu_wlun_to_scsi_wlun(UFS_UPIU_BOOT_WLUN), NULL);
 	if (IS_ERR(sdev_boot))
 		dev_err(hba->dev, "%s: BOOT WLUN not found\n", __func__);
-	else
+	else {
+		ufs_add_ufsinfo_to_productinfo(hba);
 		scsi_device_put(sdev_boot);
+	}
 	goto out;
 
 remove_sdev_ufs_device:
@@ -8529,7 +8705,8 @@ static int ufs_get_device_desc(struct ufs_hba *hba,
 	 */
 	dev_desc->wmanufacturerid = desc_buf[DEVICE_DESC_PARAM_MANF_ID] << 8 |
 				     desc_buf[DEVICE_DESC_PARAM_MANF_ID + 1];
-
+	dev_desc->manufacture_date = desc_buf[DEVICE_DESC_PARAM_MANF_DATE] << 8 |
+				     desc_buf[DEVICE_DESC_PARAM_MANF_DATE + 1];
 	dev_desc->wspecversion = desc_buf[DEVICE_DESC_PARAM_SPEC_VER] << 8 |
 				  desc_buf[DEVICE_DESC_PARAM_SPEC_VER + 1];
 
@@ -8605,6 +8782,7 @@ static void ufs_fixup_device_setup(struct ufs_hba *hba,
 {
 	struct ufs_dev_fix *f;
 
+	hba->manufacture_date = dev_desc->manufacture_date;
 	for (f = ufs_fixups; f->quirk; f++) {
 		if ((f->w_manufacturer_id == dev_desc->wmanufacturerid ||
 		     f->w_manufacturer_id == UFS_ANY_VENDOR) &&
@@ -9017,6 +9195,7 @@ static inline bool ufshcd_needs_reinit(struct ufs_hba *hba)
 	return reinit;
 }
 
+char ufs_lun_perm_wp[6];
 /**
  * ufshcd_probe_hba - probe hba to detect device and initialize
  * @hba: per-adapter instance
@@ -9027,6 +9206,9 @@ static int ufshcd_probe_hba(struct ufs_hba *hba)
 {
 	struct ufs_dev_desc card = {0};
 	int ret;
+	bool perm_wp_flag = false;
+	u8 perm_wp_lun_dsc = 0;
+
 	ktime_t start = ktime_get();
 
 reinit:
@@ -9178,10 +9360,29 @@ reinit:
 	 */
 	if (!ufshcd_eh_in_progress(hba) && !hba->pm_op_in_progress) {
 		bool flag;
+		memset(&hba->health_info, 0, sizeof(hba->health_info));
 
+		ret=ufs_read_health_desc_data(hba);
+		if (ret){
+			printk("ERROR:read health desc data,ret= %d\n",ret);
+		}
 		if (!ufshcd_query_flag_retry(hba, UPIU_QUERY_OPCODE_READ_FLAG,
 				QUERY_FLAG_IDN_PWR_ON_WPE, &flag))
 			hba->dev_info.f_power_on_wp_en = flag;
+
+		if (!ufshcd_query_flag_retry(hba, UPIU_QUERY_OPCODE_READ_FLAG,
+				QUERY_FLAG_IDN_PERMANENT_WPE, &perm_wp_flag))
+			printk("Permanent WriteProtect:flag = %d\n",perm_wp_flag);
+		if(!ufshcd_get_lu_wp(hba, 6, &perm_wp_lun_dsc))
+			printk("Permanent WriteProtect LUN :dsc = %d\n",perm_wp_lun_dsc);
+		if (perm_wp_flag == true && perm_wp_lun_dsc == 2)
+			snprintf(ufs_lun_perm_wp,
+				sizeof(ufs_lun_perm_wp), "True");
+		else
+			snprintf(ufs_lun_perm_wp,
+				sizeof(ufs_lun_perm_wp), "False");
+
+		hq_register_hw_info(HWID_UFS_WP, ufs_lun_perm_wp);
 
 		/* Add required well known logical units to scsi mid layer */
 		ret = ufshcd_scsi_add_wlus(hba);

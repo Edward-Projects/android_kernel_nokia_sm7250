@@ -1025,6 +1025,9 @@ struct ufs_hba {
 	struct ufs_vreg_info vreg_info;
 	struct list_head clk_list_head;
 
+	struct ufs_health_info health_info;
+	u16 manufacture_date;
+
 	bool wlun_dev_clr_ua;
 
 	/* Number of requests aborts */
