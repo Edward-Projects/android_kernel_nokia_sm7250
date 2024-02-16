@@ -23,6 +23,7 @@
 #endif
 #include <linux/jiffies.h>
 #include <linux/regulator/consumer.h>
+#include <linux/hqsysfs.h>
 
 struct nqx_platform_data {
 	unsigned int irq_gpio;
@@ -1769,6 +1770,7 @@ static int nqx_probe(struct i2c_client *client,
 	nqx_dev->nfc_enabled = false;
 	nqx_dev->is_ese_session_active = false;
 
+	hq_register_hw_info(HWID_NFC, "SN100T");
 	dev_err(&client->dev,
 	"%s: probing NFCC NQxxx exited successfully\n",
 		 __func__);
