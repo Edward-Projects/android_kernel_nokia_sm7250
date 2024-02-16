@@ -63,6 +63,37 @@ static uint8_t common_cmds[DIAG_NUM_COMMON_CMD] = {
 
 static uint8_t hdlc_timer_in_progress;
 
+#ifdef CONFIG_GROOT_USB_FEATURE
+#define OEM_CMD_CODE 0x7B
+#define MODEM_CMD_CODE 0x4B
+static bool boot_factory_rec = false;
+
+static int __init boot_mode_init(char *s)
+{
+	boot_factory_rec = true;
+
+	pr_err("%s: boot_factory_rec=%d", __func__, boot_factory_rec);
+
+	return 1;
+}
+__setup("androidboot.factory_rec", boot_mode_init);
+
+static int diag_send_to(unsigned char cmd_code, unsigned char subsys_id, unsigned char cmd_code_hi)
+{
+	if (cmd_code == MODEM_CMD_CODE) {
+		if (subsys_id == 0xCD) {
+			return APPS_DATA;
+		} else if (subsys_id == 0x65 || subsys_id == 0xFA) {
+			return MODEM_AND_APPS_DATA;
+		} else
+			return ALL_PROC;
+	} else if ((cmd_code == OEM_CMD_CODE) && boot_factory_rec) {
+		return APPS_DATA;
+	} else
+		return ALL_PROC;
+}
+#endif /*CONFIG_GROOT_USB_FEATURE*/
+
 /* Determine if this device uses a device tree */
 #ifdef CONFIG_OF
 static int has_device_tree(void)
@@ -1181,16 +1212,20 @@ static int diag_process_ss_diag_params(unsigned char *buf, int len, int pid)
 
 int diag_process_apps_pkt(unsigned char *buf, int len, int pid)
 {
-	int i, p_mask = 0;
+	int i = 0;
+#ifdef CONFIG_GROOT_USB_FEATURE
+	int proc;
+#endif /*CONFIG_GROOT_USB_FEATURE*/
+	int p_mask = 0;
 	int mask_ret, peripheral = -EINVAL;
 	int ret = 0, write_len = 0;
+	uint32_t pd_mask = 0;
 	unsigned char *temp = NULL;
 	struct diag_cmd_reg_entry_t entry;
 	struct diag_cmd_reg_entry_t *temp_entry = NULL;
 	struct diag_cmd_reg_t *reg_item = NULL;
-	uint32_t pd_mask = 0;
-	struct diagfwd_info *fwd_info = NULL;
 	struct diag_md_session_t *info = NULL;
+	struct diagfwd_info *fwd_info = NULL;
 
 	if (!buf || len <= 0)
 		return -EIO;
@@ -1240,6 +1275,7 @@ int diag_process_apps_pkt(unsigned char *buf, int len, int pid)
 	}
 
 	mutex_lock(&driver->cmd_reg_mutex);
+#ifndef CONFIG_GROOT_USB_FEATURE
 	temp_entry = diag_cmd_search(&entry, ALL_PROC);
 	if (temp_entry) {
 		reg_item = container_of(temp_entry, struct diag_cmd_reg_t,
@@ -1267,6 +1303,94 @@ int diag_process_apps_pkt(unsigned char *buf, int len, int pid)
 		mutex_unlock(&driver->cmd_reg_mutex);
 		return write_len;
 	}
+#else /*CONFIG_GROOT_USB_FEATURE*/
+	proc = diag_send_to(*buf, *(buf+1), *(buf+2));
+	pr_err("@@@@diag send to %d  %02x %02x\n", proc, *buf, *(buf+1));
+	if (proc != MODEM_AND_APPS_DATA) {
+		temp_entry = diag_cmd_search(&entry, proc);
+		if (temp_entry) {
+			reg_item = container_of(temp_entry, struct diag_cmd_reg_t,
+						entry);
+			mutex_lock(&driver->md_session_lock);
+			info = diag_md_session_get_pid(pid);
+			if (info) {
+				p_mask = info->peripheral_mask[DIAG_LOCAL_PROC];
+				mutex_unlock(&driver->md_session_lock);
+				MD_PERIPHERAL_PD_MASK(TYPE_CMD, reg_item->proc,
+					pd_mask);
+				if ((MD_PERIPHERAL_MASK(reg_item->proc) &
+					p_mask) || (pd_mask & p_mask))
+					write_len = diag_send_data(reg_item, buf, len);
+			} else {
+				mutex_unlock(&driver->md_session_lock);
+				if (MD_PERIPHERAL_MASK(reg_item->proc) &
+					driver->logging_mask[DIAG_LOCAL_PROC]) {
+					mutex_unlock(&driver->cmd_reg_mutex);
+					diag_send_error_rsp(buf, len, pid);
+					return write_len;
+				}
+				write_len = diag_send_data(reg_item, buf, len);
+			}
+			mutex_unlock(&driver->cmd_reg_mutex);
+			return write_len;
+		}
+	} else {
+		temp_entry = diag_cmd_search(&entry, PERIPHERAL_MODEM);
+		if (temp_entry) {
+			reg_item = container_of(temp_entry, struct diag_cmd_reg_t,
+						entry);
+			mutex_lock(&driver->md_session_lock);
+			info = diag_md_session_get_pid(pid);
+			if (info) {
+				p_mask = info->peripheral_mask[DIAG_LOCAL_PROC];
+				mutex_unlock(&driver->md_session_lock);
+				MD_PERIPHERAL_PD_MASK(TYPE_CMD, reg_item->proc,
+					pd_mask);
+				if ((MD_PERIPHERAL_MASK(reg_item->proc) &
+					p_mask) || (pd_mask & p_mask))
+					write_len = diag_send_data(reg_item, buf, len);
+			} else {
+				mutex_unlock(&driver->md_session_lock);
+				if (MD_PERIPHERAL_MASK(reg_item->proc) &
+					driver->logging_mask[DIAG_LOCAL_PROC]) {
+					mutex_unlock(&driver->cmd_reg_mutex);
+					diag_send_error_rsp(buf, len, pid);
+					return write_len;
+				}
+				write_len = diag_send_data(reg_item, buf, len);
+			}
+		}
+
+		temp_entry = diag_cmd_search(&entry, APPS_DATA);
+		if (temp_entry) {
+			reg_item = container_of(temp_entry, struct diag_cmd_reg_t,
+						entry);
+			mutex_lock(&driver->md_session_lock);
+			info = diag_md_session_get_pid(pid);
+			if (info) {
+				p_mask = info->peripheral_mask[DIAG_LOCAL_PROC];
+				mutex_unlock(&driver->md_session_lock);
+				MD_PERIPHERAL_PD_MASK(TYPE_CMD, reg_item->proc,
+					pd_mask);
+				if ((MD_PERIPHERAL_MASK(reg_item->proc) &
+					p_mask) || (pd_mask & p_mask))
+					write_len = diag_send_data(reg_item, buf, len);
+			} else {
+				mutex_unlock(&driver->md_session_lock);
+				if (MD_PERIPHERAL_MASK(reg_item->proc) &
+					driver->logging_mask[DIAG_LOCAL_PROC]) {
+					mutex_unlock(&driver->cmd_reg_mutex);
+					diag_send_error_rsp(buf, len, pid);
+					return write_len;
+				}
+				write_len = diag_send_data(reg_item, buf, len);
+			}
+			mutex_unlock(&driver->cmd_reg_mutex);
+			return write_len;
+		}
+	}
+#endif /*CONFIG_GROOT_USB_FEATURE*/
+
 	mutex_unlock(&driver->cmd_reg_mutex);
 
 #if defined(CONFIG_DIAG_OVER_USB)
@@ -1434,6 +1558,7 @@ void diag_process_hdlc_pkt(void *data, unsigned int len, int pid)
 	}
 
 	if (ret == HDLC_COMPLETE) {
+#ifndef CONFIG_GROOT_USB_FEATURE
 		err = crc_check(driver->hdlc_buf, driver->hdlc_buf_len);
 		if (err) {
 			/* CRC check failed. */
@@ -1441,6 +1566,7 @@ void diag_process_hdlc_pkt(void *data, unsigned int len, int pid)
 					   __func__);
 			goto fail;
 		}
+#endif /*CONFIG_GROOT_USB_FEATURE*/
 		driver->hdlc_buf_len -= HDLC_FOOTER_LEN;
 
 		if (driver->hdlc_buf_len < 1) {

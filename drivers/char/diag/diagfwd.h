@@ -23,6 +23,10 @@
 #define CHK_OVERFLOW(bufStart, start, end, length) \
 	((((bufStart) <= (start)) && ((end) - (start) >= (length))) ? 1 : 0)
 
+#ifdef CONFIG_GROOT_USB_FEATURE
+#define MODEM_AND_APPS_DATA 5
+#endif /*CONFIG_GROOT_USB_FEATURE*/
+
 int diagfwd_init(void);
 void diagfwd_exit(void);
 void diag_process_hdlc_pkt(void *data, unsigned int len, int pid);
