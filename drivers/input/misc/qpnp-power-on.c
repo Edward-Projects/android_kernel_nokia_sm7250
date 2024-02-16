@@ -1588,6 +1588,15 @@ static int qpnp_pon_config_parse_reset_info(struct qpnp_pon *pon,
 	return 0;
 }
 
+static bool disable_power_reset = false;
+static int __init disable_power_reset_init(char *s)
+{
+	disable_power_reset = true;
+	pr_err("%s: disable_power_reset=%d", __func__, disable_power_reset);
+	return 1;
+}
+__setup("disable_power_reset", disable_power_reset_init);
+
 static int qpnp_pon_config_init(struct qpnp_pon *pon,
 				struct platform_device *pdev)
 {
@@ -1711,6 +1720,11 @@ static int qpnp_pon_config_init(struct qpnp_pon *pon,
 				if (rc)
 					return rc;
 			}
+		} else if (disable_power_reset && cfg->pon_type == PON_KPDPWR) {
+			/* Disable S2 reset */
+			rc = qpnp_pon_masked_write(pon,
+					cfg->s2_cntl2_addr,
+					QPNP_PON_S2_CNTL_EN, 0);
 		}
 
 		rc = qpnp_pon_request_irqs(pon, cfg);
